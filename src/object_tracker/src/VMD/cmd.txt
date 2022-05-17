@@ -1,0 +1,2 @@
+g++ vmd_breath.cpp data.h VMD.h VMD_Utils.cpp -I /usr/include/eigen3 -O3
+
