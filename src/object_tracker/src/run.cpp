@@ -31,6 +31,7 @@
 
 //Tracker + Yolo includes
 #include <torch/script.h>
+#include <torch/torch.h>
 #include "Hungarian.h"
 #include "KalmanTracker.h"
 #include "SVM/FanClassifier.h"
@@ -59,9 +60,13 @@ using namespace std;
 using namespace message_filters;
 using namespace rs2;
 
+
+#define MULTI_VIEW_UWB 0
+#define COMPLEX_EVENT 1
+
 /**
  * Struct definitions
- * 
+ *
  * */
 //Used in the tracker, commonly initilized as tb
 typedef struct TrackingBox
@@ -82,7 +87,7 @@ struct Bin {
 
 //Defines and constants
 #define b_size 85
-const int chunk_size = 1024; 
+const int chunk_size = 1024;
 const int chunk_size2 = 1024;
 const int max_age = 5;
 const int min_hits = 3;
@@ -90,10 +95,6 @@ const double iouThreshold = 0.3;
 static double b[b_size] = {0.0095,-0.0010,-0.0012,-0.0015,-0.0019,-0.0024,-0.0028,-0.0032,-0.0035,-0.0036,-0.0035,-0.0031,-0.0024,-0.0015,-0.0003,0.0012,0.0028,0.0045,0.0063,0.0080,0.0094,0.0105,0.0111,0.0112,0.0105,0.0091,0.0068,0.0037,-0.0003,   -0.0050,-0.0105,-0.0166,-0.0232,-0.0300,-0.0369,-0.0437,-0.0501,-0.0560,-0.0611,-0.0652,-0.0683,-0.0702,0.9291,-0.0702,-0.0683,-0.0652,-0.0611,-0.0560,-0.0501,-0.0437,-0.0369,-0.0300,-0.0232,-0.0166,-0.0105   -0.0050,   -0.0003,    0.0037,    0.0068,    0.0091,    0.0105,    0.0112,    0.0111,    0.0105,0.0094,0.0080,0.0063,0.0045,0.0028,0.0012,-0.0003,-0.0015,-0.0024,-0.0031,-0.0035,-0.0036,-0.0035,-0.0032,-0.0028,-0.0024,-0.0019,-0.0015,-0.0012,-0.0010,0.0095};
 const int imgW = 640;
 const int imgH = 640;
-
-#define MULTI_VIEW_UWB 1
-#define COMPLEX_EVENT 0
-#define GPU 0
 
 //Variables for complex event detection
 
@@ -159,10 +160,10 @@ double computeDistance(double* pt1, double* pt2) {
 }
 
 #if MULTI_VIEW_UWB
-//UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database 
+//UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database
 //depending on whether there is aliasing in the first UWB sensor
 void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, const boost::shared_ptr<const timeArr_msgs::FloatArray> msg2)
-{   
+{
     //Msg has IQ data, we need to create a complexArray that has the elements matched up
 	int vectorCount = 0;
 	for (int i = 0; i < chunk_size; i++)
@@ -258,30 +259,30 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
                 std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
                 std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
                 slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-                
+
             }
             else {
                 double phaseDiff = referencePhase2 - std::arg(complexArr2[0][j]);
                 std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
                 std::complex<double> shiftedValue(complexArr2[index][j] * phaseShift);
                 slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-                
+
             }
-        }  
+        }
         if (database.at(i).vibration.size() >= 120) {
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
         database.at(i).vibration.emplace_back(slice);
-        
+
     }
     dataLock.unlock();
 }
 
-#else 
+#else
 void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 {
-    
+
     //Msg has IQ data, we need to create a complexArray that has the elements matched up
 	int vectorCount = 0;
 	for (int i = 0; i < chunk_size; i++)
@@ -323,8 +324,8 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
             std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
             std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
             slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-        
-        }  
+
+        }
         if (database.at(i).vibration.size() >= 10) { //It was 120
         /* print all the data in the buffer
         if (database.at(i).type == "washing machine" && database.at(i).state == 1)
@@ -336,13 +337,13 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
                     printf("%.16f ,", database.at(i).vibration.at(m)[n]);
                 }
             }
-        } 
+        }
         exit(0);
         */
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
-        database.at(i).vibration.emplace_back(slice);     
+        database.at(i).vibration.emplace_back(slice);
     }
     dataLock.unlock();
 }
@@ -359,39 +360,39 @@ double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image>
     double zTotal = 0;
     double origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV + middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
     //Find an acceptable point to start at
-    
+
     while ( (origDepth == 0 || origDepth > 6.3)  && !(abs(middleU - imgW) < 7 || abs(middleV - imgH) < 7 || abs(middleU) < 7 || abs(middleV) < 7) ) {
         middleU += rand() % 3 - 1;
         middleV += rand() % 3 - 1;
         origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV+ middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
     }
-    
+
     if (abs(middleU - imgW) < 7 || abs(middleV - imgH) < 7 || abs(middleU) < 7 || abs(middleV) < 7) {
         arr[0] = arr[1] = arr[2] = -1;
         return 0;
     }
-    
+
     float minDepth = origDepth;
     for (int i = middleV - 1; i < middleV + 2; i++) {
         for (int j = middleU - 1; j < middleU + 2; j++) {
-            float currDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) 
+            float currDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8)
             | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)])));
             if (minDepth < currDepth && currDepth > 0.5) {
                 minDepth = currDepth;
             }
         }
     }
-    
+
     //Go around that point and compute the distance
     for (int j = middleV - 4; j < middleV + 4; j++) {
         for (int k = middleU - 2; k < middleU + 2; k++) {
-            double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * j + k) + 1]) << 8) | 
+            double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * j + k) + 1]) << 8) |
                 ((uint16_t)(depthImg->data[2 * (depthImg->width * j + k)])));
             if ((std::abs(depthAtPixel - minDepth) < 0.3)) {
                 float point[3];
-                float pixel[2] = {k, j};
+                float pixel[2] = {float(k), float(j)};
                 rs2_deproject_pixel_to_point(point, &intrin, pixel, depthAtPixel);
-                std::cout << point[2] << " " << depthAtPixel << std::endl;
+                // std::cout << point[2] << " " << depthAtPixel << std::endl;
                 //Transform to AprilTag coords
                 Eigen::Vector3d coordVec(point[0] + translationMatrix(0), point[1] + translationMatrix(1), point[2] + translationMatrix(2));
                 coordVec = rotationMatrix * coordVec;
@@ -430,7 +431,7 @@ std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_
         torch::Tensor pred = preds.select(0, i);
         // Filter by scores
         torch::Tensor scores = pred.select(1, 4) * std::get<0>(torch::max(pred.slice(1, 5, pred.sizes()[1]), 1));
-        
+
         pred = torch::index_select(pred, 0, torch::nonzero(scores > score_thresh).select(1, 0));
         if (pred.sizes()[0] == 0) {
             output.push_back(pred);
@@ -441,12 +442,12 @@ std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_
         pred.select(1, 1) = pred.select(1, 1) - pred.select(1, 3) / 2;
         pred.select(1, 2) = pred.select(1, 0) + pred.select(1, 2);
         pred.select(1, 3) = pred.select(1, 1) + pred.select(1, 3);
-        
+
         // Computing scores and classes
         std::tuple<torch::Tensor, torch::Tensor> max_tuple = torch::max(pred.slice(1, 5, pred.sizes()[1]), 1);
         pred.select(1, 4) = pred.select(1, 4) * std::get<0>(max_tuple);
         pred.select(1, 5) = std::get<1>(max_tuple);
-       
+
         torch::Tensor dets = pred.slice(1, 0, 6);
         torch::Tensor keep = torch::empty({dets.sizes()[0]});
         torch::Tensor areas = (dets.select(1, 3) - dets.select(1, 1)) * (dets.select(1, 2) - dets.select(1, 0));
@@ -556,7 +557,7 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
             torch::Tensor ious = overlaps / (areas.select(0, indexes[max_score_arg].item().toInt()) + torch::index_select(areas, 0, indexes.slice(0, 0, indexes.sizes()[0])) - overlaps);
             torch::Tensor scores_discount = torch::ones(scores.sizes()[0]) - ious;
             scores_discount.index_select(0, torch::nonzero(ious <= iou_thresh).select(1, 0)) = 1; // no discont for boxes with iou<threshold
-            
+
             torch::Tensor obj_type_diff = torch::index_select(classes, 0, indexes.slice(0, 0, indexes.sizes()[0])) - classes.select(0, indexes[max_score_arg].item().toInt());
             scores_discount.index_select(0, torch::nonzero(obj_type_diff != 0).select(1, 0)) = 1; // no discont for boxes with differnt classes
 
@@ -624,7 +625,7 @@ std::string getState(std::string classifier, int state) {
             return "on";
         }
     }
-} 
+}
 
 //Gets the transform matrix from LiDAR to apriltag frame, called once at the beginning of program execution
 void getTransform(cv::Mat cameraMatrix, cv::Mat distCoeffs, cv::Mat image)
@@ -669,17 +670,13 @@ bool gotTransform = false;
 void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, const boost::shared_ptr<const sensor_msgs::Image> depthImg2)
 {
     torch::DeviceType device_type;
-    #if GPU 
-        if (torch::cuda::is_available()) {
-            device_type = torch::kCUDA;
-        } else {
-            device_type = torch::kCPU;
-        }
-    #else 
+    if (torch::cuda::is_available()) {
+        device_type = torch::kCUDA;
+    } else {
         device_type = torch::kCPU;
-    #endif
-
-    //double startTime = ros::Time::now().toSec();
+    }
+    torch::Device device(device_type);
+    // double startTime = ros::Time::now().toSec();
 
     if (!gotTransform) {
         cv::Mat camMatrix(3, 3, CV_32FC1, camParam);
@@ -702,22 +699,18 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     cv::Mat img_input = img.clone();
     cv::Mat img_input2 = img.clone();
     cv::resize(img, img_input, cv::Size(imgW, imgH));
-    
-    
 
     //Conduct inference
     imgTensor = torch::from_blob(img_input.data, {img_input.rows, img_input.cols, 3}, torch::kByte);
-    imgTensor = imgTensor.permute({2, 0, 1});    
+    imgTensor = imgTensor.permute({2, 0, 1});
     imgTensor = imgTensor.toType(torch::kFloat);
     imgTensor = imgTensor.div(255);
     imgTensor = imgTensor.unsqueeze(0);
-
-    // preds: [?, 15120, 9]
-    torch::Tensor preds = module.forward({imgTensor}).toTuple()->elements()[0].toTensor();  
+    // preds: [batch_size, #_of_bb_boxes, #_of_classes]
+    torch::Tensor preds = module.forward({imgTensor.to(device)}).toTuple()->elements()[0].toTensor().to(torch::kCPU);
     std::vector<torch::Tensor> dets = soft_non_max_suppression(preds, 0.2, 0.6);
-   
 
-    //std::cout << "Model Inference Time is: " << ros::Time::now().toSec() - startTime << std::endl;
+    // std::cout << "Model Inference Time is: " << ros::Time::now().toSec() - startTime << std::endl;
     //Return if no objects detected
     if (dets.size() == 0 || dets[0].sizes()[0] == 0) {
         cv::cvtColor(img, img, cv::COLOR_BGR2RGB, 3);
@@ -757,20 +750,21 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 KalmanTracker trk = KalmanTracker(tb.box, tb.classifier, tb.score, tb.id);
                 trackers.push_back(trk);
             }
-        } 
+        }
         //Return out of function, no need to track because first frame
         return;
     }
-
     ///////////////////////////////////////
     // 3.1. get predicted locations from existing trackers.
     predictedBoxes.clear();
+    predictedBoxesClass.clear();
     for (auto it = trackers.begin(); it != trackers.end();)
     {
         Rect_<float> pBox = (*it).predict();
         if (pBox.x >= 0 && pBox.y >= 0)
         {
             predictedBoxes.push_back(pBox);
+            predictedBoxesClass.push_back((*it).m_classifier);
             it++;
         }
         else
@@ -788,14 +782,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
 
     iouMatrix.clear();
     iouMatrix.resize(trkNum, vector<double>(detNum, 0));
-    
     for (unsigned int i = 0; i < trkNum; i++) // compute iou matrix as a distance matrix
     {
         for (unsigned int j = 0; j < detNum; j++)
         {
             // use 1-iou because the hungarian algorithm computes a minimum-cost assignment.
             //iouMatrix[i][j] = 1 - GetIOU(predictedBoxes[i], detFrameData[fi][j].box);
-            
+
             float left = dets[0][j][0].item().toFloat() * img.cols / imgW;
             float top = dets[0][j][1].item().toFloat() * img.rows / imgH;
             float right = dets[0][j][2].item().toFloat() * img.cols / imgW;
@@ -812,7 +805,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             }
             */
 
-
             if (predictedBoxesClass[i] == classnames.at(dets[0][j][5].item().toInt()))
             {
                 iouMatrix[i][j] = 1 - GetIOU(predictedBoxes[i], Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom)));
@@ -823,7 +815,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             }
         }
     }
-
 
     // solve the assignment problem using hungarian algorithm.
     // the resulting assignment is [track(prediction) : detection], with len=preNum
@@ -836,11 +827,11 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     unmatchedDetections.clear();
     allItems.clear();
     matchedItems.clear();
-    
+
     //New individual enters scene
     if (detNum > trkNum) //	there are unmatched detections
     {
-        
+
         for (unsigned int n = 0; n < detNum; n++)
             allItems.insert(n);
 
@@ -877,11 +868,10 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         else
             matchedPairs.push_back(cv::Point(i, assignment[i]));
     }
-    
 
     ///////////////////////////////////////
     // 3.3. updating trackers
- 
+
     //Iterate through the matched trackers and update them with the new information
     int detIdx, trkIdx;
     for (unsigned int i = 0; i < matchedPairs.size(); i++)
@@ -948,13 +938,12 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         }
         //Remove dead trackers that haven't been updated in 5 frames
         else if (it != trackers.end() && (*it).m_time_since_update > max_age) {
-            it = trackers.erase(it);         
+            it = trackers.erase(it);
         }
         else {
             it++;
         }
     }
-    
 
     //Increment the inactive ticks, every update resets ticksInactive to zero
     dataLock.lock();
@@ -992,7 +981,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         }
         dataLock.unlock();
     }
-  
+
     dataLock.lock();
 
     //Update depth of objects that are still in database but not identified
@@ -1024,13 +1013,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             }
             if (washing_machine_detected) break;
         }
-        if (!washing_machine_detected) 
+        if (!washing_machine_detected)
         {
             interaction_detected = 0;
         }
         else
         {
-            for (int i = 0; i < database.size(); i++) 
+            for (int i = 0; i < database.size(); i++)
             {
                 obj temp = database.at(i); // person?
                 double person_coords[3] = {0, 0, 0};
@@ -1134,7 +1123,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             CV_RGB(255, 0, 0),
             2);
     }
-    //Display 
+    //Display
     cv::imshow("Output", img);
     cv::waitKey(1);
     if (++timeCount >= 100) {
@@ -1143,18 +1132,18 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     }
     //averageTime += ros::Time::now().toSec() - startTime;
     //std::cout << "Leaving with elapsed " << averageTime / timeCount << std::endl;
-    
+
 }
 
 //TODO function measuring performance of single SVM computation
 void calling_svm(obj& elem)
 {
-    
+
     double slice[3 * chunk_size2 - 2] = {0.0}; //If this isnt zero filled does it cause any issues?
     if (elem.vibration.empty()) {
         return;
     }
-    double *tempArr = elem.vibration.back(); 
+    double *tempArr = elem.vibration.back();
     for (int i = 0; i < chunk_size2; i++) {
         slice[i] = tempArr[chunk_size2-1-i];
     }
@@ -1164,7 +1153,7 @@ void calling_svm(obj& elem)
     for (int i = 0; i < chunk_size2; i++) {
         slice[i+chunk_size2-2] = tempArr[chunk_size2-1-i];
     }
-    
+
     //low pass filtering cut_low=20, cut_high=70
     Eigen::VectorXd zi(b_size);
     double largeZVector[3 * chunk_size2 - 2];
@@ -1214,9 +1203,9 @@ void calling_svm(obj& elem)
 
     int half_length = chunk_size2 / 2;
     double P1[half_length];
-    for(int i=0;i<half_length;i++) 
+    for(int i=0;i<half_length;i++)
     {
-        P1[i] = std::abs(Y[i+1]); 
+        P1[i] = std::abs(Y[i+1]);
     }
 
     int feature_size = 32;
@@ -1226,7 +1215,7 @@ void calling_svm(obj& elem)
     {
         double temp_max = 0.0;
         for(int j=0; j<intevals;j++)
-        {   
+        {
             if (P1[i*intevals+j] > temp_max)
             {
                 temp_max = P1[i*intevals+j];
@@ -1259,13 +1248,13 @@ void calling_svm(obj& elem)
     int state = -1;
     string classifier = elem.type;
     if (classifier == "standing fan") {
-        state = FanClassifier::fan_predict(features); 
+        state = FanClassifier::fan_predict(features);
     }
     else if (classifier == "vacuum") {
         state = VacuumClassifier::vacuum_predict(features);
     }
     else if (classifier == "washing machine") {
-        state = WashingClassifier::washing_predict(features); 
+        state = WashingClassifier::washing_predict(features);
         //cout << state<<endl<<endl<<endl;
     }
     else if (classifier == "drill") {
@@ -1276,10 +1265,10 @@ void calling_svm(obj& elem)
         std::cout << classifier << std::endl;
         std::cout << "SOMETHING IS TERRIBLY WRONG" << std::endl;
     }
-    
-    dataLock.lock(); 
+
+    dataLock.lock();
     // elem.state = state; //if no buffer is used
-    // dataLock.unlock();      
+    // dataLock.unlock();
     if (elem.state_history.size() >= 30) { // 500ms * 30 = 15s
         elem.state_history.pop_front();
     }
@@ -1302,8 +1291,8 @@ void calling_svm(obj& elem)
     if (classifier == "washing machine") {
         washine_machine_state = elem.state;
     }
-    dataLock.unlock();  
-       
+    dataLock.unlock();
+
     //std::cout << elem.type << "'s state is " << elem.state << std::endl;
 }
 
@@ -1322,7 +1311,7 @@ int calling_vmd(obj& elem)
 	const int K = 4, DC = 0, init = 1;
 	MatrixXd u, omega;
 	MatrixXcd u_hat;
-    
+
 	runVMD(u, u_hat, omega, unfiltered_data, alpha, tau, K, DC, init, tol, eps);
 
     Eigen::VectorXd new_sig = u.row(0);
@@ -1339,9 +1328,9 @@ int calling_vmd(obj& elem)
     double P1[half_length - ignored_freq_bins];
     double max_val = -1;
     int max_idx = -1;
-    for(int j=ignored_freq_bins;j<half_length;j++) 
+    for(int j=ignored_freq_bins;j<half_length;j++)
     {
-        P1[j-ignored_freq_bins] = std::abs(Y[j]); 
+        P1[j-ignored_freq_bins] = std::abs(Y[j]);
         if (P1[j-ignored_freq_bins] > max_val)
         {
             max_val = P1[j-ignored_freq_bins];
@@ -1349,19 +1338,19 @@ int calling_vmd(obj& elem)
         }
     }
 
-    float bpm = 60 * float(max_idx) / float(sig_length) * Fs; 
+    float bpm = 60 * float(max_idx) / float(sig_length) * Fs;
     dataLock.lock();
     elem.state = (int) bpm;
     dataLock.unlock();
-    std::cout << ros::Time::now().toSec() - startTime << std::endl; 
+    std::cout << ros::Time::now().toSec() - startTime << std::endl;
     return 0;
 }
 
 int state_classifiers()
-{   
+{
     std::vector<std::thread> ThreadVector;
     while(1)
-    {      
+    {
         //TODO conduct timing analysis here to measure one pass of SVM on a frame
         dataLock.lock();
         for (int i = 0; i < database.size(); i++) {
@@ -1384,10 +1373,10 @@ int state_classifiers()
                     ThreadVector.emplace_back([&](){calling_svm(elem);});
                 }
             }
-            
+
         }
         dataLock.unlock();
-        
+
         ThreadVector.emplace_back([&](){usleep(500000);}); //guardian thread, 100ms(10Hz)
         if (ThreadVector.size())
         {
@@ -1413,7 +1402,7 @@ int respiration_est()
 {
     std::vector<std::thread> ThreadVector;
     while(1)
-    {   
+    {
         //TODO conduct timing analysis here for VMD running on one frame
         dataLock.lock();
         for (int i = 0; i < database.size(); i++) {
@@ -1460,34 +1449,31 @@ int start_ros_spin()
 
 int main(int argc, char* argv[]) {
     torch::DeviceType device_type;
-    #if GPU 
-        if (torch::cuda::is_available()) {
-            device_type = torch::kCUDA;
-        } else {
-            device_type = torch::kCPU;
-        }
-    #else 
+    if (torch::cuda::is_available()) {
+        device_type = torch::kCUDA;
+        module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
+    } else {
         device_type = torch::kCPU;
-    #endif
+        module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Scratch.torchscript.pt", device_type);
+    }
     ros::init(argc, argv, "object_tracker");
     ros::NodeHandle nh;
     message_filters::Subscriber<sensor_msgs::Image> color_sub(nh, "/lidar/color", 5);
     message_filters::Subscriber<sensor_msgs::Image> depth_sub(nh, "/lidar/depth", 5);
     typedef sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> MySyncPolicyLidar;
     Synchronizer<MySyncPolicyLidar> syncLidar(MySyncPolicyLidar(10), color_sub, depth_sub);
-    syncLidar.registerCallback(boost::bind(&trackObjects, _1, _2)); 
+    syncLidar.registerCallback(boost::bind(&trackObjects, _1, _2));
     #if MULTI_VIEW_UWB
         message_filters::Subscriber<timeArr_msgs::FloatArray> uwb1_sub(nh, "/uwb_chunk", 5);
         typedef sync_policies::ApproximateTime<timeArr_msgs::FloatArray, timeArr_msgs::FloatArray> MySyncPolicyUWB;
         message_filters::Subscriber<timeArr_msgs::FloatArray> uwb2_sub(nh, "/uwb_chunk2", 5);
         Synchronizer<MySyncPolicyUWB> syncUWB(MySyncPolicyUWB(10), uwb1_sub, uwb2_sub);
         syncUWB.registerCallback(boost::bind(&uwbCallback, _1, _2));
-    #else 
+    #else
         ros::Subscriber uwb_sub = nh.subscribe("uwb_chunk", 5, uwbCallback);
     #endif
 
-    module = torch::jit::load("/home/nesl/Desktop/uwb_ws/src/object_tracker/Weights/640_Scratch.torchscript.pt", device_type);
-    std::ifstream f("/home/nesl/Desktop/uwb_ws/src/object_tracker/objects.names");
+    std::ifstream f("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/objects.names");
     std::string name = "";
     while (std::getline(f, name))
     {
