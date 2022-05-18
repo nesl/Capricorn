@@ -1,0 +1,6 @@
+include_directories(
+"${PROJECT_SOURCE_DIR}/XDriver"
+)
+
+add_library(XDriver x4driver.c)
+

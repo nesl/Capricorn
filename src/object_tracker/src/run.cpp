@@ -93,8 +93,8 @@ const int max_age = 5;
 const int min_hits = 3;
 const double iouThreshold = 0.3;
 static double b[b_size] = {0.0095,-0.0010,-0.0012,-0.0015,-0.0019,-0.0024,-0.0028,-0.0032,-0.0035,-0.0036,-0.0035,-0.0031,-0.0024,-0.0015,-0.0003,0.0012,0.0028,0.0045,0.0063,0.0080,0.0094,0.0105,0.0111,0.0112,0.0105,0.0091,0.0068,0.0037,-0.0003,   -0.0050,-0.0105,-0.0166,-0.0232,-0.0300,-0.0369,-0.0437,-0.0501,-0.0560,-0.0611,-0.0652,-0.0683,-0.0702,0.9291,-0.0702,-0.0683,-0.0652,-0.0611,-0.0560,-0.0501,-0.0437,-0.0369,-0.0300,-0.0232,-0.0166,-0.0105   -0.0050,   -0.0003,    0.0037,    0.0068,    0.0091,    0.0105,    0.0112,    0.0111,    0.0105,0.0094,0.0080,0.0063,0.0045,0.0028,0.0012,-0.0003,-0.0015,-0.0024,-0.0031,-0.0035,-0.0036,-0.0035,-0.0032,-0.0028,-0.0024,-0.0019,-0.0015,-0.0012,-0.0010,0.0095};
-const int imgW = 640;
-const int imgH = 640;
+const int imgW = 320;
+const int imgH = 320;
 
 //Variables for complex event detection
 
@@ -153,7 +153,7 @@ rs2_intrinsics intrin;
 //UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
 double uwb1Absolute[3] = {0, 0, 0};
 double uwb2Absolute[3] = {-1, 2, 0};
-
+double bbox_factor = 0;
 
 double computeDistance(double* pt1, double* pt2) {
     return sqrt( (pt1[0] - pt2[0]) * (pt1[0] - pt2[0]) + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]) + (pt1[2] - pt2[2]) * (pt1[2] - pt2[2]));
@@ -269,7 +269,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
 
             }
         }
-        if (database.at(i).vibration.size() >= 120) {
+        if (database.at(i).vibration.size() >= 30) {
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
@@ -312,7 +312,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
 		double objDepth = computeDistance(tempPoint, uwb1Absolute);
         //Get index corresponding to the given distance from lidar
-        int adj = 4;
+        int adj = 2;
 		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
         //This is probably useless, please ignore
         double sumSquared = 0;
@@ -326,7 +326,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
             slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
 
         }
-        if (database.at(i).vibration.size() >= 10) { //It was 120
+        if (database.at(i).vibration.size() >= 30) { //It was 120
         /* print all the data in the buffer
         if (database.at(i).type == "washing machine" && database.at(i).state == 1)
         {
@@ -349,11 +349,106 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 }
 #endif
 
+double getDepth(const boost::shared_ptr<const sensor_msgs::Image> depthImg, int lowerX, int upperX, int lowerY, int upperY) {
+    int middleX = (lowerX + upperX) / 2;
+    int middleY = (lowerY + upperY) / 2;
+    double origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleY + middleX) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleY + middleX)])));
+    /*
+    if (origDepth > 2) {
+        double totalDepth = 0;
+        int count = 0;
+        for(int i = middleY - 4; i < middleY + 4; i++) {
+            for (int j = middleX - 4; j < middleX + 4; j++) {
+                double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)])));
+                if (std::abs(depthAtPixel - origDepth) < 0.03) {
+                    totalDepth += depthAtPixel;
+                    count++;
+                }
+            }
+        }
+        return totalDepth / count;
+    }
+    else {
+        */
+        //Create distance bins of 1 cm
+        Bin values[500];
+        for (int i = 0; i < 500; i++) {
+            values[i].lowerBound = 0.01 * i;
+            values[i].totalDepth = 0;
+            values[i].numOccurrence = 0;
+        }
+        //Prevents invalid values from being used for depth processing
+        if (upperX > 640 || upperY > 480) {
+            upperX = 640;
+            upperY = 480;
+        }
+        
+        
+        //Loop through the area in the boxes and add the depth to the appropriate bin
+        for (int i = lowerY; i < upperY; i++) {
+            for (int j = lowerX; j < upperX; j+= 3) {
+                uint16_t depthAtPixel = (((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)]));
+                double depth = 0.00025 * depthAtPixel;
+                if (depth > 4.3 || depth == 0) {
+                    continue;
+                }
+                int binNum = (int) (depth * 100);
+                values[binNum].totalDepth += depth;
+                values[binNum].numOccurrence++;
+            }
+        } 
+
+        //Vector holding the significant clusters found
+        std::vector<Bin> sigPts;
+        bool newDetection = true;
+        bool secondChance = true;
+        //Loop through the bins 
+        for (int i = 2; i < 500; i++) {
+            double avgDistance = values[i].totalDepth / values[i].numOccurrence;
+            int peakValue = 20 - i / 100; //Number of points in bin to be considered significant, scales based on distance because further objects are "smaller"
+            //Found new peak, push onto sigPts
+            if (newDetection && values[i].numOccurrence > peakValue && values[i - 1].numOccurrence > peakValue) {
+                sigPts.push_back(values[i - 1]);
+                sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
+                sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
+                newDetection = false;
+                continue;
+            }
+            //Peaking continues, update the element
+            if (!newDetection && values[i].numOccurrence > peakValue) {
+                sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
+                sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
+            }
+            //No peak found, reset for new peak
+            else if (!newDetection) {
+                newDetection = true;
+            }
+        }
+        //No peaks found, return
+        if (sigPts.size() == 0) {
+            return 0;
+        }
+        //Loop through and find the most significant bins (the one with most points)
+        Bin maxBin;
+        for (int i = 0; i < sigPts.size(); i++) { //Todo change back to 1
+            if (sigPts.at(i).numOccurrence > 5) {
+                maxBin = sigPts.at(i);
+                break;
+            }
+        }
+        
+        //Get the average distance of that bin and return
+        return maxBin.totalDepth / maxBin.numOccurrence;
+   // }
+     
+}
+
 //Returns the location of the object's centroid (x,y,z) in APRILTAG coordinates in variable arr
 double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image> colorImg, const boost::shared_ptr<const sensor_msgs::Image> depthImg, Rect_<float> box, double* arr) {
+    
     int middleU = (int) (box.tl().x + box.br().x) / 2.0;
     int middleV = (int) (box.tl().y + box.br().y) / 2.0;
-    middleV = middleV + 10;
+    /*
     double count = 0;
     double xTotal = 0;
     double yTotal = 0;
@@ -361,14 +456,15 @@ double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image>
     double origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV + middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
     //Find an acceptable point to start at
 
-    while ( (origDepth == 0 || origDepth > 6.3)  && !(abs(middleU - imgW) < 7 || abs(middleV - imgH) < 7 || abs(middleU) < 7 || abs(middleV) < 7) ) {
+    while ( (origDepth == 0 || origDepth > 4)  && !(middleU < box.tl().x || middleV < box.tl().y|| middleU > box.br().x  || middleV > box.br().y) ) {
         middleU += rand() % 3 - 1;
         middleV += rand() % 3 - 1;
         origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV+ middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
     }
 
-    if (abs(middleU - imgW) < 7 || abs(middleV - imgH) < 7 || abs(middleU) < 7 || abs(middleV) < 7) {
+    if (middleU < box.tl().x || middleV < box.tl().y|| middleU > box.br().x  || middleV > box.br().y) {
         arr[0] = arr[1] = arr[2] = -1;
+        std::cout << "Object not found in bbox"  << std::endl;
         return 0;
     }
 
@@ -384,7 +480,7 @@ double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image>
     }
 
     //Go around that point and compute the distance
-    for (int j = middleV - 4; j < middleV + 4; j++) {
+    for (int j = middleV - 2; j < middleV + 2; j++) {
         for (int k = middleU - 2; k < middleU + 2; k++) {
             double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * j + k) + 1]) << 8) |
                 ((uint16_t)(depthImg->data[2 * (depthImg->width * j + k)])));
@@ -408,7 +504,24 @@ double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image>
     arr[1] = yTotal / count;
     arr[2] = zTotal / count;
     return computeDistance(arr, uwb1Absolute);
+    */
+    double depth = getDepth(depthImg, box.tl().x, box.br().x, box.tl().y, box.br().y);
+    float point[3];
+    float pixel[2] = {float(middleU), float(middleV)};
+    rs2_deproject_pixel_to_point(point, &intrin, pixel, depth);
+    // std::cout << point[2] << " " << depthAtPixel << std::endl;
+    //Transform to AprilTag coords
+    Eigen::Vector3d coordVec(point[0] + translationMatrix(0), point[1] + translationMatrix(1), point[2] + translationMatrix(2));
+    coordVec = rotationMatrix * coordVec;
+    arr[0] = coordVec(0);
+    arr[1] = coordVec(1);
+    arr[2] = coordVec(2);
+    return 0.0;
 }
+
+//TODO depth estimation function
+
+
 
 // Computes IOU between two bounding boxes
 double GetIOU(Rect_<float> bb_test, Rect_<float> bb_gt)
@@ -708,7 +821,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     imgTensor = imgTensor.unsqueeze(0);
     // preds: [batch_size, #_of_bb_boxes, #_of_classes]
     torch::Tensor preds = module.forward({imgTensor.to(device)}).toTuple()->elements()[0].toTensor().to(torch::kCPU);
-    std::vector<torch::Tensor> dets = soft_non_max_suppression(preds, 0.2, 0.6);
+    std::vector<torch::Tensor> dets = soft_non_max_suppression(preds, 0.2, 0.7);
 
     // std::cout << "Model Inference Time is: " << ros::Time::now().toSec() - startTime << std::endl;
     //Return if no objects detected
@@ -735,10 +848,10 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 float top = dets[0][i][1].item().toFloat() * img.rows / imgH;
                 float right = dets[0][i][2].item().toFloat() * img.cols / imgW;
                 float bottom = dets[0][i][3].item().toFloat() * img.rows / imgH;
-                left *= 1.05;
-                top *= 1.05;
-                right *= 0.95;
-                bottom *= 0.95;
+                left *= (1 + bbox_factor);
+                top *= 1 + bbox_factor;
+                right *= 1 - bbox_factor;
+                bottom *= 1 - bbox_factor;
                 float score = dets[0][i][4].item().toFloat();
                 int classID = dets[0][i][5].item().toInt();
                 TrackingBox tb;
@@ -793,10 +906,10 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             float top = dets[0][j][1].item().toFloat() * img.rows / imgH;
             float right = dets[0][j][2].item().toFloat() * img.cols / imgW;
             float bottom = dets[0][j][3].item().toFloat() * img.rows / imgH;
-            left *= 1.05;
-            top *= 1.05;
-            right *= 0.95;
-            bottom *= 0.95;
+            left *= (1 + bbox_factor);
+            top *= 1 + bbox_factor;
+            right *= 1 - bbox_factor;
+            bottom *= 1 - bbox_factor;
 
             /*
             if ((right - left) * (bottom - top) < 10000) {
@@ -882,10 +995,10 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float top = dets[0][detIdx][1].item().toFloat() * img.rows / imgH;
         float right = dets[0][detIdx][2].item().toFloat() * img.cols / imgW;
         float bottom = dets[0][detIdx][3].item().toFloat() * img.rows / imgH;
-        left *= 1.05;
-        top *= 1.05;
-        right *= 0.95;
-        bottom *= 0.95;
+        left *= (1 + bbox_factor);
+        top *= 1 + bbox_factor;
+        right *= 1 - bbox_factor;
+        bottom *= 1 - bbox_factor;
         float score = dets[0][detIdx][4].item().toFloat();
         int classID = dets[0][detIdx][5].item().toInt();
         trackers[trkIdx].update(Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom)),  classnames.at(classID), score);
@@ -898,10 +1011,10 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float top = dets[0][umd][1].item().toFloat() * img.rows / imgH;
         float right = dets[0][umd][2].item().toFloat() * img.cols / imgW;
         float bottom = dets[0][umd][3].item().toFloat() * img.rows / imgH;
-        left *= 1.05;
-        top *= 1.05;
-        right *= 0.95;
-        bottom *= 0.95;
+        left *= (1 + bbox_factor);
+        top *= 1 + bbox_factor;
+        right *= 1 - bbox_factor;
+        bottom *= 1 - bbox_factor;
         float score = dets[0][umd][4].item().toFloat();
         int classID = dets[0][umd][5].item().toInt();
         /*
@@ -1055,7 +1168,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         double centroid[3] = {elem.x, elem.y, elem.z};
         double distance = computeDistance(centroid, uwb1Absolute);
         std::stringstream ss;
-        ss << ((int)(distance * 1000)) / 1000.0 << "m " << elem.score;
+        ss << ((int)(distance * 1000)) / 1000.0 << "m";
         cv::putText(img, //target image
             ss.str(), //text
             cv::Point(box.x + 5,  box.y + 20), //top-left position
@@ -1115,6 +1228,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 interaction_detected = 0;
                 break;
         }
+        /*
         cv::putText(img, //target image
             "Current Stage is:" + curr_stage_text, //text
             cv::Point(0,  30), //top-left position
@@ -1122,6 +1236,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             1.0,
             CV_RGB(255, 0, 0),
             2);
+            */
     }
     //Display
     cv::imshow("Output", img);
@@ -1259,7 +1374,6 @@ void calling_svm(obj& elem)
     }
     else if (classifier == "drill") {
         state = DrillClassifier::drill_predict(features);
-
     }
     else {
         std::cout << classifier << std::endl;
@@ -1269,7 +1383,7 @@ void calling_svm(obj& elem)
     dataLock.lock();
     // elem.state = state; //if no buffer is used
     // dataLock.unlock();
-    if (elem.state_history.size() >= 30) { // 500ms * 30 = 15s
+    if (elem.state_history.size() >= 5) { // 500ms * 30 = 15s
         elem.state_history.pop_front();
     }
     elem.state_history.push_back(state);
@@ -1303,7 +1417,7 @@ int calling_vmd(obj& elem)
     double startTime = ros::Time::now().toSec();
     int Fs = 1000;
     std::vector<double> unfiltered_data = elem.flattenArr();
-    if (unfiltered_data.size() <= 30 * 500) {
+    if (unfiltered_data.size() <= 20 * chunk_size) {
         return 0;
     }
     int sig_length = unfiltered_data.size();
@@ -1356,7 +1470,7 @@ int state_classifiers()
         for (int i = 0; i < database.size(); i++) {
             int temp = i;
             obj& elem = database.at(i);
-            if (1)
+            if (elem.type != "person")
             {
                 if (elem.ticksInactive > deletionTicks) {
                     std::cout << "Element is being deleted" << std::endl;
@@ -1454,7 +1568,7 @@ int main(int argc, char* argv[]) {
         module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
     } else {
         device_type = torch::kCPU;
-        module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/640_Scratch.torchscript.pt", device_type);
+        module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/FullModelSmall.torchscript.pt", device_type);
     }
     ros::init(argc, argv, "object_tracker");
     ros::NodeHandle nh;
@@ -1493,7 +1607,7 @@ int main(int argc, char* argv[]) {
     intrin.coeffs[4] = 0.462624;
     std::thread sensor_fusion(start_ros_spin);
     std::thread state_classifications(state_classifiers);
-    //std::thread state_regressions(respiration_est);
+    std::thread state_regressions(respiration_est);
     state_classifications.detach();
     //state_regressions.detach();
     sensor_fusion.join();
