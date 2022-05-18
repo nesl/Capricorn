@@ -1454,7 +1454,7 @@ int main(int argc, char* argv[]) {
         module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
     } else {
         device_type = torch::kCPU;
-        module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Scratch.torchscript.pt", device_type);
+        module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/640_Scratch.torchscript.pt", device_type);
     }
     ros::init(argc, argv, "object_tracker");
     ros::NodeHandle nh;
@@ -1473,7 +1473,7 @@ int main(int argc, char* argv[]) {
         ros::Subscriber uwb_sub = nh.subscribe("uwb_chunk", 5, uwbCallback);
     #endif
 
-    std::ifstream f("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/objects.names");
+    std::ifstream f("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/objects.names");
     std::string name = "";
     while (std::getline(f, name))
     {
