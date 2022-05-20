@@ -61,8 +61,8 @@ using namespace message_filters;
 using namespace rs2;
 
 
-#define MULTI_VIEW_UWB 0
-#define COMPLEX_EVENT 1
+#define MULTI_VIEW_UWB 1
+#define COMPLEX_EVENT 0
 
 /**
  * Struct definitions
@@ -152,7 +152,7 @@ rs2_intrinsics intrin;
 
 //UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
 double uwb1Absolute[3] = {0, 0, 0};
-double uwb2Absolute[3] = {-1, 2, 0};
+double uwb2Absolute[3] = {-1.37, -0.27, 0};
 double bbox_factor = 0;
 
 double computeDistance(double* pt1, double* pt2) {
@@ -1568,7 +1568,7 @@ int main(int argc, char* argv[]) {
         module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
     } else {
         device_type = torch::kCPU;
-        module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/FullModelSmall.torchscript.pt", device_type);
+        module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/FullSet.torchscript.pt", device_type);
     }
     ros::init(argc, argv, "object_tracker");
     ros::NodeHandle nh;
