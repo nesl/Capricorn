@@ -154,6 +154,7 @@ rs2_intrinsics intrin;
 double uwb1Absolute[3] = {0, 0, 0};
 double uwb2Absolute[3] = {-0.9632, -0.1268, 1.406};
 double bbox_factor = 0;
+bool uwb_1_used = true;
 
 
 double computeMean(double* arr) {
@@ -250,6 +251,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
         }
     }
     std::cout << std::endl;
+    uwb_1_used = uwb1Acceptable;
     if (uwb1Acceptable) {
         std::cout << "UWB 1 Acceptable" << std::endl;
     }
@@ -278,16 +280,17 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
                     slice[k] = std::abs(complexArr2[j][k]);
                 }
             }
-            varArr[j - index - 2] = computeVariance(slice);
+            varArr[j - index + 2] = computeVariance(slice);
         }
         double maxVal = 0;
+        int maxIndex = 0;
         for (int j = 0; j < 5; j++) {
             if (varArr[j] > maxVal) {
                 maxVal = varArr[j];
-                index = j + index - 2;
+                maxIndex = j + index - 2;
             }
         }
-
+        index = maxIndex;
         //Compute phase difference in each element
         for (int j = 0; j < chunk_size; j++)
         {
@@ -345,6 +348,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 	referencePhase /= chunk_size;
     dataLock.lock();
 	//Take slice of data for each entry in the database
+   
 	for (int i = 0; i < database.size(); i++) {
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
 		double objDepth = computeDistance(tempPoint, uwb1Absolute);
@@ -353,21 +357,25 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
         //This is probably useless, please ignore
         double* slice = new double[chunk_size];
+        
         //Compute phase difference in each element
         double varArr[5];
         for (int j = index - 2; j <= index + 2; j++) {
             for (int k = 0; k < chunk_size; k++) {
                 slice[k] = std::abs(complexArr1[j][k]);
             }
-            varArr[j - index - 2] = computeVariance(slice);
+            varArr[j - index + 2] = computeVariance(slice);
         }
         double maxVal = 0;
+        double indexMax = 0;
         for (int j = 0; j < 5; j++) {
             if (varArr[j] > maxVal) {
                 maxVal = varArr[j];
-                index = j + index - 2;
+                indexMax = j + index - 2;
             }
         }
+        index = indexMax;
+        std::cout << index << std::endl;
         for (int j = 0; j < chunk_size; j++)
         {
             double phaseDiff = referencePhase - std::arg(complexArr1[0][j]);
@@ -389,7 +397,7 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
             }
         }
         exit(0);
-        */
+        */  
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
@@ -1217,6 +1225,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         string state = getState(elem.type, elem.state);
         double centroid[3] = {elem.x, elem.y, elem.z};
         double distance = computeDistance(centroid, uwb1Absolute);
+        string uwb_status = (uwb_1_used) ? "UWB 1 is used" : "UWB 2 is used";
         std::stringstream ss;
         ss << ((int)(distance * 1000)) / 1000.0 << "m";
         cv::putText(img, //target image
@@ -1237,6 +1246,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         cv::putText(img, //target image
             state, //text
             cv::Point(box.x + 5 ,  box.y + 120), //top-left position
+            cv::FONT_HERSHEY_DUPLEX,
+            0.8,
+            CV_RGB(255, 0, 0),
+            2);
+        cv::putText(img, 
+            uwb_status,
+            cv::Point(10, 50),
             cv::FONT_HERSHEY_DUPLEX,
             0.8,
             CV_RGB(255, 0, 0),
