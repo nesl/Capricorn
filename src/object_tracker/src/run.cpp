@@ -152,8 +152,26 @@ rs2_intrinsics intrin;
 
 //UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
 double uwb1Absolute[3] = {0, 0, 0};
-double uwb2Absolute[3] = {-1.37, -0.27, 0};
+double uwb2Absolute[3] = {-0.9632, -0.1268, 1.406};
 double bbox_factor = 0;
+
+
+double computeMean(double* arr) {
+    double mean = 0;
+    for (int i = 0; i < chunk_size; i++) {
+        mean += arr[i];
+    }
+    return mean / chunk_size;
+}
+
+double computeVariance(double* arr) {
+    double mean = computeMean(arr);
+    double variance = 0;
+    for (int i = 0; i < chunk_size; i++) {
+        variance += (arr[i] - mean) * (arr[i] - mean);
+    }
+    return variance / chunk_size;
+}
 
 double computeDistance(double* pt1, double* pt2) {
     return sqrt( (pt1[0] - pt2[0]) * (pt1[0] - pt2[0]) + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]) + (pt1[2] - pt2[2]) * (pt1[2] - pt2[2]));
@@ -246,11 +264,30 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
         //Get distance from the UWB
 		double objDepth = uwb1Acceptable ? computeDistance(tempPoint, uwb1Absolute) : computeDistance(tempPoint, uwb2Absolute);
-        int adj = 4;
+        int adj = 0;
         //Converts to a UWB index
 		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
-        double sumSquared = 0;
         double* slice = new double[chunk_size];
+        double varArr[5];
+        for (int j = index - 2; j <= index + 2; j++) {
+            for (int k = 0; k < chunk_size; k++) {
+                if (uwb1Acceptable) {
+                    slice[k] = std::abs(complexArr1[j][k]);
+                }
+                else {
+                    slice[k] = std::abs(complexArr2[j][k]);
+                }
+            }
+            varArr[j - index - 2] = computeVariance(slice);
+        }
+        double maxVal = 0;
+        for (int j = 0; j < 5; j++) {
+            if (varArr[j] > maxVal) {
+                maxVal = varArr[j];
+                index = j + index - 2;
+            }
+        }
+
         //Compute phase difference in each element
         for (int j = 0; j < chunk_size; j++)
         {
@@ -312,12 +349,25 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
 		double objDepth = computeDistance(tempPoint, uwb1Absolute);
         //Get index corresponding to the given distance from lidar
-        int adj = 2;
+        int adj = 0;
 		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
         //This is probably useless, please ignore
-        double sumSquared = 0;
         double* slice = new double[chunk_size];
         //Compute phase difference in each element
+        double varArr[5];
+        for (int j = index - 2; j <= index + 2; j++) {
+            for (int k = 0; k < chunk_size; k++) {
+                slice[k] = std::abs(complexArr1[j][k]);
+            }
+            varArr[j - index - 2] = computeVariance(slice);
+        }
+        double maxVal = 0;
+        for (int j = 0; j < 5; j++) {
+            if (varArr[j] > maxVal) {
+                maxVal = varArr[j];
+                index = j + index - 2;
+            }
+        }
         for (int j = 0; j < chunk_size; j++)
         {
             double phaseDiff = referencePhase - std::arg(complexArr1[0][j]);
@@ -1339,12 +1389,12 @@ void calling_svm(obj& elem)
         features[i] += temp_max;
     }
     // Removed: Normalize the extracted frequency features
-    // min_val = *std::min_element(features, features+feature_size);
-    // max_val = *std::max_element(features, features+feature_size);
-    // for (int i=0;i<feature_size;i++)
-    // {
-    //    features[i] = (features[i]- min_val) / (max_val - min_val + 1e-32);
-    // }
+    double min_val = *std::min_element(features, features+feature_size);
+    double max_val = *std::max_element(features, features+feature_size);
+    for (int i=0;i<feature_size;i++)
+    {
+       features[i] = (features[i]- min_val) / (max_val - min_val + 1e-32);
+    }
 
     /* Debug: Printing the extracted features
     if (elem.type == "washing machine") {
