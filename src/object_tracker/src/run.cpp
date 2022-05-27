@@ -10,8 +10,7 @@
 #include <iostream>
 #include <time.h>
 #include <fstream>
-#include <iomanip> // to format image names using setw() and setfill()
-//#include <io.h> // to check file existence using POSIX function access(). On Linux include <unistd.h>.
+#include <iomanip> 
 #include <unistd.h>
 #include <set>
 #include <string>
@@ -34,12 +33,14 @@
 #include <torch/torch.h>
 #include "Hungarian.h"
 #include "KalmanTracker.h"
+#include "data_structure.cpp"
+
+//SVM + VMD Classifier Includes
 #include "SVM/FanClassifier.h"
 #include "SVM/VacuumClassifier.h"
 #include "SVM/WashingClassifier.h"
 #include "SVM/HumanClassifier.h"
 #include "SVM/DrillClassifier.h"
-#include "data_structure.cpp"
 #include "VMD/VMD.h"
 
 
@@ -49,7 +50,7 @@
 #include <Eigen/Eigen>
 #include <Eigen/Core>
 
-//Realsense + Messages Includes
+//Realsense and Custom Message Includes
 #include "std_msgs/Float32MultiArray.h"
 #include <librealsense2/rs.hpp> // Include RealSense Cross Platform API
 #include "timeArr_msgs/FloatArray.h"
@@ -60,15 +61,11 @@ using namespace std;
 using namespace message_filters;
 using namespace rs2;
 
-
-#define MULTI_VIEW_UWB 1
-#define COMPLEX_EVENT 0
-
 /**
  * Struct definitions
- *
  * */
-//Used in the tracker, commonly initilized as tb
+
+//Used in the tracker, usually initialized as tb
 typedef struct TrackingBox
 {
     int frame;
@@ -85,26 +82,36 @@ struct Bin {
     double totalDepth = 0;
 };
 
-//Defines and constants
-#define b_size 85
-const int chunk_size = 1024;
-const int chunk_size2 = 1024;
+/**
+ * Macros and Constants
+ */
+#define b_size 85 //b_size used for filtering cutoff
+#define MULTI_VIEW_UWB 0 //MULTI_VIEW for two UWB sensors
+#define COMPLEX_EVENT 0  //COMPLEX_EVENT for human + washing machine interaction
+//UWB chunk size
+const int chunkSize = 1024; 
+const int chunkSize2 = 1024;
+//Tracking max age and min hit parameters
 const int max_age = 5;
 const int min_hits = 3;
-const double iouThreshold = 0.3;
+const double iouThreshold = 0.3; 
 static double b[b_size] = {0.0095,-0.0010,-0.0012,-0.0015,-0.0019,-0.0024,-0.0028,-0.0032,-0.0035,-0.0036,-0.0035,-0.0031,-0.0024,-0.0015,-0.0003,0.0012,0.0028,0.0045,0.0063,0.0080,0.0094,0.0105,0.0111,0.0112,0.0105,0.0091,0.0068,0.0037,-0.0003,   -0.0050,-0.0105,-0.0166,-0.0232,-0.0300,-0.0369,-0.0437,-0.0501,-0.0560,-0.0611,-0.0652,-0.0683,-0.0702,0.9291,-0.0702,-0.0683,-0.0652,-0.0611,-0.0560,-0.0501,-0.0437,-0.0369,-0.0300,-0.0232,-0.0166,-0.0105   -0.0050,   -0.0003,    0.0037,    0.0068,    0.0091,    0.0105,    0.0112,    0.0111,    0.0105,0.0094,0.0080,0.0063,0.0045,0.0028,0.0012,-0.0003,-0.0015,-0.0024,-0.0031,-0.0035,-0.0036,-0.0035,-0.0032,-0.0028,-0.0024,-0.0019,-0.0015,-0.0012,-0.0010,0.0095};
+//Model input image height and width
 const int imgW = 320;
 const int imgH = 320;
+const int deletionTicks = 5; //How many frames before deletion from database
 
-//Variables for complex event detection
-
+/**
+ * Variables for complex event detection
+ */
 int interaction_detected = 0;
 int washine_machine_state = -1;
 int curr_stage = 0;
 std::string curr_stage_text;
 
-
-//Global variables used for tracking
+/**
+ * Global variables used for tracking
+ */
 int frame_count = 0;
 int database_id;
 vector<KalmanTracker> trackers;
@@ -124,17 +131,18 @@ unsigned int detNum = 0;
 //Yolo model global variables
 torch::jit::script::Module module;
 std::vector<std::string> classnames;
+torch::Tensor imgTensor;
+bool gotTransform = false;
 
 //In memory database
 vector<obj> database;
 
 //Complex array used for UWB, prevents allocation of array each time
-std::complex<double> complexArr1[120][chunk_size];
-std::complex<double> complexArr2[120][chunk_size];
+std::complex<double> complexArr1[120][chunkSize];
+std::complex<double> complexArr2[120][chunkSize];
 
-//Mutex Lock
+//Mutex Lock for thread safety
 std::mutex dataLock;
-const int deletionTicks = 5; //How many frames before deletion
 
 //Camera Parameters
 float fx = 603.824;
@@ -152,260 +160,93 @@ rs2_intrinsics intrin;
 
 //UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
 double uwb1Absolute[3] = {0, 0, 0};
-double uwb2Absolute[3] = {-0.9632, -0.1268, 1.406};
-double bbox_factor = 0;
-bool uwb_1_used = true;
+double uwb2Absolute[3] = { -0.963236, -0.126797, 1.40613};
 
+bool uwb1Used = true; //Used for multi view
+
+/**
+ * Helper functions
+ */
 
 double computeMean(double* arr) {
     double mean = 0;
-    for (int i = 0; i < chunk_size; i++) {
+    for (int i = 0; i < chunkSize; i++) {
         mean += arr[i];
     }
-    return mean / chunk_size;
+    return mean / chunkSize;
 }
 
 double computeVariance(double* arr) {
     double mean = computeMean(arr);
     double variance = 0;
-    for (int i = 0; i < chunk_size; i++) {
+    for (int i = 0; i < chunkSize; i++) {
         variance += (arr[i] - mean) * (arr[i] - mean);
     }
-    return variance / chunk_size;
+    return variance / chunkSize;
+}
+
+double computeHHI(double* arr) {
+    Eigen::VectorXcd sig_amp(chunkSize);
+    for (int i=0;i<chunkSize;i++)
+    {
+        sig_amp[i] = arr[i];
+    }
+    //Perform FFT
+    Eigen::FFT<double> fft;
+    Eigen::VectorXcd Y(chunkSize);
+    fft.fwd(Y, sig_amp);
+    int half_length = chunkSize / 2;
+    double P1[half_length];
+    for(int i=0;i<half_length;i++)
+    {
+        P1[i] = std::abs(Y[i+1]);
+    }
+    double sum = 0;
+    for(int i=0;i<half_length;i++)
+    {
+        sum += P1[i];
+    }
+    double hhi = 0;
+    for(int i=0;i<half_length;i++)
+    {
+        hhi += (P1[i]/sum) * (P1[i]/sum);
+    }
+    return hhi;
 }
 
 double computeDistance(double* pt1, double* pt2) {
     return sqrt( (pt1[0] - pt2[0]) * (pt1[0] - pt2[0]) + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]) + (pt1[2] - pt2[2]) * (pt1[2] - pt2[2]));
 }
 
-#if MULTI_VIEW_UWB
-//UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database
-//depending on whether there is aliasing in the first UWB sensor
-void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, const boost::shared_ptr<const timeArr_msgs::FloatArray> msg2)
-{
-    //Msg has IQ data, we need to create a complexArray that has the elements matched up
-	int vectorCount = 0;
-	for (int i = 0; i < chunk_size; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr1[j][i] = std::complex<double>(msg1->data.at(vectorCount), msg1->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
-
-    //Compute phase difference in first distance bin
-	double referencePhase1 = 0;
-	for (int i = 0; i < chunk_size; i++)
-	{
-		referencePhase1 += std::arg(complexArr1[0][i]);
-	}
-
-    //Compute average
-	referencePhase1 /= chunk_size;
-
-    //Repeat for second UWB chunk, we gotta synch the uwbs :(
-    vectorCount = 0;
-    for (int i = 0; i < chunk_size; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr2[j][i] = std::complex<double>(msg2->data.at(vectorCount), msg2->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
-
-    //Compute phase difference in first distance bin
-	double referencePhase2 = 0;
-	for (int i = 0; i < chunk_size; i++)
-	{
-		referencePhase2 += std::arg(complexArr2[0][i]);
-	}
-
-    //Compute average
-	referencePhase2 /= chunk_size;
-
-    //Decide whether uwb1 is acceptable to be used for uwb computation
-    dataLock.lock();
-    int dataSize = database.size();
-    double distanceUWB1[dataSize]; //Array of distances from UWB
-    for (int i = 0; i < dataSize; i++) {
-        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
-        distanceUWB1[i] = computeDistance(tempPoint, uwb1Absolute);
+int calibration(double objDepth){
+    if(objDepth<1.05){
+        return -2;
     }
-    dataLock.unlock();
-    bool uwb1Acceptable = true;
-    std::cout << "Distance of UWB 1 is ";
-    for (int i = 0; i < dataSize - 1; i++) {
-        std::cout << distanceUWB1[i] << " ";
-        for (int j = i + 1; j < dataSize; j++) {
-            if (abs(distanceUWB1[i] - distanceUWB1[j]) < 0.3) {
-                uwb1Acceptable = false;
-            }
-        }
-    }
-    std::cout << std::endl;
-    uwb_1_used = uwb1Acceptable;
-    if (uwb1Acceptable) {
-        std::cout << "UWB 1 Acceptable" << std::endl;
-    }
-    else {
-        std::cout << "UWB2 is being used" << std::endl;
-    }
-
-
-    dataLock.lock();
-	//Take slice of data for each entry in the database
-	for (int i = 0; i < database.size(); i++) {
-        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
-        //Get distance from the UWB
-		double objDepth = uwb1Acceptable ? computeDistance(tempPoint, uwb1Absolute) : computeDistance(tempPoint, uwb2Absolute);
-        int adj = 0;
-        //Converts to a UWB index
-		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
-        double* slice = new double[chunk_size];
-        double varArr[5];
-        for (int j = index - 2; j <= index + 2; j++) {
-            for (int k = 0; k < chunk_size; k++) {
-                if (uwb1Acceptable) {
-                    slice[k] = std::abs(complexArr1[j][k]);
-                }
-                else {
-                    slice[k] = std::abs(complexArr2[j][k]);
-                }
-            }
-            varArr[j - index + 2] = computeVariance(slice);
-        }
-        double maxVal = 0;
-        int maxIndex = 0;
-        for (int j = 0; j < 5; j++) {
-            if (varArr[j] > maxVal) {
-                maxVal = varArr[j];
-                maxIndex = j + index - 2;
-            }
-        }
-        index = maxIndex;
-        //Compute phase difference in each element
-        for (int j = 0; j < chunk_size; j++)
-        {
-            if (uwb1Acceptable) {
-                double phaseDiff = referencePhase1 - std::arg(complexArr1[0][j]);
-                std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
-                std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
-                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
-            }
-            else {
-                double phaseDiff = referencePhase2 - std::arg(complexArr2[0][j]);
-                std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
-                std::complex<double> shiftedValue(complexArr2[index][j] * phaseShift);
-                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
-            }
-        }
-        if (database.at(i).vibration.size() >= 30) {
-            delete database.at(i).vibration.front();
-            database.at(i).vibration.pop_front();
-        }
-        database.at(i).vibration.emplace_back(slice);
-
-    }
-    dataLock.unlock();
+    else if(objDepth<1.1){
+        return -1;
+    } 
+    else if(objDepth<1.3){
+        return 0;
+    } 
+    else if(objDepth<2.3){
+        return 1;
+    } 
+    else{
+        return 2;
+    } 
 }
 
-#else
-void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
+// Computes IOU between two bounding boxes
+double GetIOU(Rect_<float> bb_test, Rect_<float> bb_gt)
 {
+    float in = (bb_test & bb_gt).area();
+    float un = bb_test.area() + bb_gt.area() - in;
 
-    //Msg has IQ data, we need to create a complexArray that has the elements matched up
-	int vectorCount = 0;
-	for (int i = 0; i < chunk_size; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr1[j][i] = std::complex<double>(msg->data.at(vectorCount), msg->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
+    if (un < DBL_EPSILON)
+        return 0;
 
-    //Compute phase difference in first distance bin
-	double referencePhase = 0;
-	for (int i = 0; i < chunk_size; i++)
-	{
-		referencePhase += std::arg(complexArr1[0][i]);
-	}
-
-    //Compute average
-	referencePhase /= chunk_size;
-    dataLock.lock();
-	//Take slice of data for each entry in the database
-   
-	for (int i = 0; i < database.size(); i++) {
-        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
-		double objDepth = computeDistance(tempPoint, uwb1Absolute);
-        //Get index corresponding to the given distance from lidar
-        int adj = 0;
-		int index = (int)((objDepth - 0.3) / 0.0514) + adj; // was +4 here
-        //This is probably useless, please ignore
-        double* slice = new double[chunk_size];
-        
-        //Compute phase difference in each element
-        double varArr[5];
-        for (int j = index - 2; j <= index + 2; j++) {
-            for (int k = 0; k < chunk_size; k++) {
-                slice[k] = std::abs(complexArr1[j][k]);
-            }
-            varArr[j - index + 2] = computeVariance(slice);
-        }
-        double maxVal = 0;
-        double indexMax = 0;
-        for (int j = 0; j < 5; j++) {
-            if (varArr[j] > maxVal) {
-                maxVal = varArr[j];
-                indexMax = j + index - 2;
-            }
-        }
-        index = indexMax;
-        std::cout << index << std::endl;
-        for (int j = 0; j < chunk_size; j++)
-        {
-            double phaseDiff = referencePhase - std::arg(complexArr1[0][j]);
-            std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
-            std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
-            slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
-        }
-        if (database.at(i).vibration.size() >= 30) { //It was 120
-        /* print all the data in the buffer
-        if (database.at(i).type == "washing machine" && database.at(i).state == 1)
-        {
-            for (int m=0; m<20; m++)
-            {
-                for (int n=0; n<1024; n++)
-                {
-                    printf("%.16f ,", database.at(i).vibration.at(m)[n]);
-                }
-            }
-        }
-        exit(0);
-        */  
-            delete database.at(i).vibration.front();
-            database.at(i).vibration.pop_front();
-        }
-        database.at(i).vibration.emplace_back(slice);
-    }
-    dataLock.unlock();
+    return (double)(in / un);
 }
-#endif
 
 double getDepth(const boost::shared_ptr<const sensor_msgs::Image> depthImg, int lowerX, int upperX, int lowerY, int upperY) {
     int middleX = (lowerX + upperX) / 2;
@@ -577,21 +418,9 @@ double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image>
     return 0.0;
 }
 
-//TODO depth estimation function
-
-
-
-// Computes IOU between two bounding boxes
-double GetIOU(Rect_<float> bb_test, Rect_<float> bb_gt)
-{
-    float in = (bb_test & bb_gt).area();
-    float un = bb_test.area() + bb_gt.area() - in;
-
-    if (un < DBL_EPSILON)
-        return 0;
-
-    return (double)(in / un);
-}
+/**
+ * Vision Pipeline Helper Functions
+ */
 
 //Original NMS
 std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_thresh = 0.2, float iou_thresh = 0.2)
@@ -741,8 +570,7 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
     return output;
 }
 
-
-
+//Convert integer state to string depending on object type
 std::string getState(std::string classifier, int state) {
     if (state == -1) {
         return "Estimating...";
@@ -833,11 +661,279 @@ void getTransform(cv::Mat cameraMatrix, cv::Mat distCoeffs, cv::Mat image)
 
 }
 
+/**
+ *  Callback Functions
+ */
+
+#if MULTI_VIEW_UWB
+//UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database
+//depending on whether there is aliasing in the first UWB sensor
+void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, const boost::shared_ptr<const timeArr_msgs::FloatArray> msg2)
+{
+    //Msg has IQ data, we need to create a complexArray that has the elements matched up
+	int vectorCount = 0;
+	for (int i = 0; i < chunkSize; i++)
+	{
+		for (int j = 0; j < 120; j++)
+		{
+            //Fills complex array
+			complexArr1[j][i] = std::complex<double>(msg1->data.at(vectorCount), msg1->data.at(vectorCount + 120));
+			vectorCount++;
+		}
+		vectorCount += 120;
+	}
+    //Note that complexArr has each distance bin as a row, each column is time (1s)
+
+    //Compute phase difference in first distance bin
+	double referencePhase1 = 0;
+	for (int i = 0; i < chunkSize; i++)
+	{
+		referencePhase1 += std::arg(complexArr1[0][i]);
+	}
+
+    //Compute average
+	referencePhase1 /= chunkSize;
+
+    //Repeat for second UWB chunk, we gotta synch the uwbs :(
+    vectorCount = 0;
+    for (int i = 0; i < chunkSize; i++)
+	{
+		for (int j = 0; j < 120; j++)
+		{
+            //Fills complex array
+			complexArr2[j][i] = std::complex<double>(msg2->data.at(vectorCount), msg2->data.at(vectorCount + 120));
+			vectorCount++;
+		}
+		vectorCount += 120;
+	}
+    //Note that complexArr has each distance bin as a row, each column is time (1s)
+
+    //Compute phase difference in first distance bin
+	double referencePhase2 = 0;
+	for (int i = 0; i < chunkSize; i++)
+	{
+		referencePhase2 += std::arg(complexArr2[0][i]);
+	}
+
+    //Compute average
+	referencePhase2 /= chunkSize;
+
+    //Decide whether uwb1 is acceptable to be used for uwb computation
+    dataLock.lock();
+    int dataSize = database.size();
+    double distanceUWB1[dataSize]; //Array of distances from UWB
+    for (int i = 0; i < dataSize; i++) {
+        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
+        distanceUWB1[i] = computeDistance(tempPoint, uwb1Absolute);
+    }
+    dataLock.unlock();
+    bool uwb1Acceptable = true;
+    for (int i = 0; i < dataSize - 1; i++) {
+        for (int j = i + 1; j < dataSize; j++) {
+            if (abs(distanceUWB1[i] - distanceUWB1[j]) < 0.3) {
+                uwb1Acceptable = false;
+            }
+        }
+    }
+    uwb1Used = uwb1Acceptable;
+
+    dataLock.lock();
+	//Take slice of data for each entry in the database
+	for (int i = 0; i < database.size(); i++) {
+        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
+        //Get distance from the UWB
+		double objDepth = uwb1Acceptable ? computeDistance(tempPoint, uwb1Absolute) : computeDistance(tempPoint, uwb2Absolute);
+        int adj = 0;
+        adj = calibration(objDepth);
+        if (!uwb1Acceptable) {adj-=2;} //compensate for UWB2 distance estimation error
+        //Converts to a UWB index
+		int index = std::round((objDepth - 0.3) / 0.0514) + adj; 
+
+        //Converts to a UWB index
+        double* slice = new double[chunkSize];
+
+        /*
+        double varArr[5];
+        for (int j = index - 2; j <= index + 2; j++) {
+            for (int k = 0; k < chunkSize; k++) {
+                if (uwb1Acceptable) {
+                    slice[k] = std::abs(complexArr1[j][k]);
+                }
+                else {
+                    slice[k] = std::abs(complexArr2[j][k]);
+                }
+            }
+            varArr[j - index + 2] = computeVariance(slice);
+            // varArr[j - index + 2] = computeHHI(slice);
+        }
+        double maxVal = 0;
+       
+        // int maxIndex = 0;
+        int idx_adj = 0;
+        for (int j = 0; j < 5; j++) {
+            if (varArr[j] > maxVal) {
+                maxVal = varArr[j];
+                // maxIndex = j + index - 2;
+                idx_adj = j - 2;  
+            }
+        }
+        
+        // database.at(i).var_history.push_back(idx_adj);
+        // if (database.at(i).var_history.size()>5){
+        //     database.at(i).var_history.pop_front();
+        // }
+        // idx_adj = 0;
+        // for (int j = 0; j < database.at(i).var_history.size(); j++) {
+        //     idx_adj += database.at(i).var_history[j];
+        // }
+        // idx_adj = (int)(idx_adj/5.0) ;
+        // for (int j = 0; j < database.at(i).var_history.size(); j++) {
+        //     cout << database.at(i).var_history[j] << ",";
+        // }
+        // cout << endl << idx_adj << endl;
+        
+
+        if (objDepth < 1.5) {
+            for (int j = 0; j < 5; j++) {
+                std::cout << varArr[j] << ",";
+            }
+        }
+
+        index += idx_adj;
+        cout << index<< endl;
+        */
+        
+        //Compute phase difference in each element
+        for (int j = 0; j < chunkSize; j++)
+        {
+            if (uwb1Acceptable) {
+                double phaseDiff = referencePhase1 - std::arg(complexArr1[0][j]);
+                std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
+                std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
+                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
+
+            }
+            else {
+                double phaseDiff = referencePhase2 - std::arg(complexArr2[0][j]);
+                std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
+                std::complex<double> shiftedValue(complexArr2[index][j] * phaseShift);
+                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
+
+            }
+        }
+        if (database.at(i).vibration.size() >= 30) {
+            delete database.at(i).vibration.front();
+            database.at(i).vibration.pop_front();
+        }
+        database.at(i).vibration.emplace_back(slice);
+
+    }
+    dataLock.unlock();
+}
+
+#else
+void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
+{
+
+    //Msg has IQ data, we need to create a complexArray that has the elements matched up
+	int vectorCount = 0;
+	for (int i = 0; i < chunkSize; i++)
+	{
+		for (int j = 0; j < 120; j++)
+		{
+            //Fills complex array
+			complexArr1[j][i] = std::complex<double>(msg->data.at(vectorCount), msg->data.at(vectorCount + 120));
+			vectorCount++;
+		}
+		vectorCount += 120;
+	}
+    //Note that complexArr has each distance bin as a row, each column is time (1s)
+
+    //Compute phase difference in first distance bin
+	double referencePhase = 0;
+	for (int i = 0; i < chunkSize; i++)
+	{
+		referencePhase += std::arg(complexArr1[0][i]);
+	}
+
+    //Compute average
+	referencePhase /= chunkSize;
+    dataLock.lock();
+	//Take slice of data for each entry in the database
+   
+	for (int i = 0; i < database.size(); i++) {
+        double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
+		double objDepth = computeDistance(tempPoint, uwb1Absolute);
+        //Get index corresponding to the given distance from lidar
+        int adj = 0;
+        adj = calibration(objDepth);
+		int index = std::round((objDepth - 0.3) / 0.0514) + adj; 
+
+        //This is probably useless, please ignore
+        double* slice = new double[chunkSize];
+        //Compute phase difference in each element
+        /*
+        double varArr[5];
+        for (int j = index - 2; j <= index + 2; j++) {
+            for (int k = 0; k < chunkSize; k++) {
+                slice[k] = std::abs(complexArr1[j][k]);
+            }
+            varArr[j - index + 2] = computeVariance(slice);
+        }
+        double maxVal = 0;
+        int indexMax = 0;
+        for (int j = 0; j < 5; j++) {
+            if (varArr[j] > maxVal) {
+                maxVal = varArr[j];
+                indexMax = j + index - 2;
+            }
+        }
+        if (objDepth > 2.1) {
+            for (int j = 0; j < 5; j++) {
+                std::cout << varArr[j];
+            }
+        }
+        std::cout << std::endl;
+        //std::cout << "Index at " << indexMax <<  "Prev index at " << index << std::endl;
+        index = indexMax;
+        */
+        
+        for (int j = 0; j < chunkSize; j++)
+        {
+            double phaseDiff = referencePhase - std::arg(complexArr1[0][j]);
+            std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
+            std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
+            slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
+
+        }
+        if (database.at(i).vibration.size() >= 30) { //It was 120
+        /* print all the data in the buffer
+        if (database.at(i).type == "washing machine" && database.at(i).state == 1)
+        {
+            for (int m=0; m<20; m++)
+            {
+                for (int n=0; n<1024; n++)
+                {
+                    printf("%.16f ,", database.at(i).vibration.at(m)[n]);
+                }
+            }
+        }
+        exit(0);
+        */  
+            delete database.at(i).vibration.front();
+            database.at(i).vibration.pop_front();
+        }
+        database.at(i).vibration.emplace_back(slice);
+    }
+    dataLock.unlock();
+}
+#endif
+
+
 //Subscribes to lidar stream, feeds into Yolo, then tracks the object
 double averageTime = 0;
 int timeCount = 0;
-torch::Tensor imgTensor;
-bool gotTransform = false;
+
 void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, const boost::shared_ptr<const sensor_msgs::Image> depthImg2)
 {
     torch::DeviceType device_type;
@@ -865,8 +961,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     KalmanTracker::kf_count = 0; // tracking id relies on this, so we have to reset it in each seq.
     //Convert to opencv
     cv::Mat img(colorImg2->height, colorImg2->width, CV_8UC3, const_cast<uchar *>(&colorImg2->data[0]), colorImg2->step);
-    //Modify images to correct format
-    //cv::cvtColor(img, img, cv::COLOR_BGR2RGB, 3);
     cv::Mat img_input = img.clone();
     cv::Mat img_input2 = img.clone();
     cv::resize(img, img_input, cv::Size(imgW, imgH));
@@ -906,10 +1000,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 float top = dets[0][i][1].item().toFloat() * img.rows / imgH;
                 float right = dets[0][i][2].item().toFloat() * img.cols / imgW;
                 float bottom = dets[0][i][3].item().toFloat() * img.rows / imgH;
-                left *= (1 + bbox_factor);
-                top *= 1 + bbox_factor;
-                right *= 1 - bbox_factor;
-                bottom *= 1 - bbox_factor;
                 float score = dets[0][i][4].item().toFloat();
                 int classID = dets[0][i][5].item().toInt();
                 TrackingBox tb;
@@ -964,10 +1054,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             float top = dets[0][j][1].item().toFloat() * img.rows / imgH;
             float right = dets[0][j][2].item().toFloat() * img.cols / imgW;
             float bottom = dets[0][j][3].item().toFloat() * img.rows / imgH;
-            left *= (1 + bbox_factor);
-            top *= 1 + bbox_factor;
-            right *= 1 - bbox_factor;
-            bottom *= 1 - bbox_factor;
 
             /*
             if ((right - left) * (bottom - top) < 10000) {
@@ -1053,10 +1139,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float top = dets[0][detIdx][1].item().toFloat() * img.rows / imgH;
         float right = dets[0][detIdx][2].item().toFloat() * img.cols / imgW;
         float bottom = dets[0][detIdx][3].item().toFloat() * img.rows / imgH;
-        left *= (1 + bbox_factor);
-        top *= 1 + bbox_factor;
-        right *= 1 - bbox_factor;
-        bottom *= 1 - bbox_factor;
         float score = dets[0][detIdx][4].item().toFloat();
         int classID = dets[0][detIdx][5].item().toInt();
         trackers[trkIdx].update(Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom)),  classnames.at(classID), score);
@@ -1069,10 +1151,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float top = dets[0][umd][1].item().toFloat() * img.rows / imgH;
         float right = dets[0][umd][2].item().toFloat() * img.cols / imgW;
         float bottom = dets[0][umd][3].item().toFloat() * img.rows / imgH;
-        left *= (1 + bbox_factor);
-        top *= 1 + bbox_factor;
-        right *= 1 - bbox_factor;
-        bottom *= 1 - bbox_factor;
         float score = dets[0][umd][4].item().toFloat();
         int classID = dets[0][umd][5].item().toInt();
         /*
@@ -1192,7 +1270,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         {
             for (int i = 0; i < database.size(); i++)
             {
-                obj temp = database.at(i); // person?
+                obj temp = database.at(i); 
                 double person_coords[3] = {0, 0, 0};
                 if (temp.type == "person") {
                     washing_machine_detected = 1;
@@ -1200,7 +1278,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                     person_coords[1] = 0;
                     person_coords[2] = temp.z;
                     double distance = computeDistance(person_coords, washing_machine_coords);
-                    if (distance <= 0.5) //TODO change constant
+                    if (distance <= 0.5) 
                     {
                         interaction_detected = 1;
                     }
@@ -1225,7 +1303,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         string state = getState(elem.type, elem.state);
         double centroid[3] = {elem.x, elem.y, elem.z};
         double distance = computeDistance(centroid, uwb1Absolute);
-        string uwb_status = (uwb_1_used) ? "UWB 1 is used" : "UWB 2 is used";
+        string uwb_status = (uwb1Used) ? "UWB 1 is used" : "UWB 2 is used";
         std::stringstream ss;
         ss << ((int)(distance * 1000)) / 1000.0 << "m";
         cv::putText(img, //target image
@@ -1250,13 +1328,15 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             0.8,
             CV_RGB(255, 0, 0),
             2);
-        cv::putText(img, 
-            uwb_status,
-            cv::Point(10, 50),
-            cv::FONT_HERSHEY_DUPLEX,
-            0.8,
-            CV_RGB(255, 0, 0),
-            2);
+        if(COMPLEX_EVENT) {
+            cv::putText(img, 
+                uwb_status,
+                cv::Point(10, 50),
+                cv::FONT_HERSHEY_DUPLEX,
+                0.8,
+                CV_RGB(255, 0, 0),
+                2);
+        }
     }
 
     dataLock.unlock();
@@ -1316,31 +1396,35 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
 
 }
 
-//TODO function measuring performance of single SVM computation
+/**
+ *  SVM and VMD Functions
+ */
+
+//Performs SVM on a single object
 void calling_svm(obj& elem)
 {
 
-    double slice[3 * chunk_size2 - 2] = {0.0}; //If this isnt zero filled does it cause any issues?
+    double slice[3 * chunkSize2 - 2] = {0.0}; //If this isnt zero filled does it cause any issues?
     if (elem.vibration.empty()) {
         return;
     }
     double *tempArr = elem.vibration.back();
-    for (int i = 0; i < chunk_size2; i++) {
-        slice[i] = tempArr[chunk_size2-1-i];
+    for (int i = 0; i < chunkSize2; i++) {
+        slice[i] = tempArr[chunkSize2-1-i];
     }
-    for (int i = 0; i < chunk_size2; i++) {
-        slice[i+chunk_size2-1] = tempArr[i];
+    for (int i = 0; i < chunkSize2; i++) {
+        slice[i+chunkSize2-1] = tempArr[i];
     }
-    for (int i = 0; i < chunk_size2; i++) {
-        slice[i+chunk_size2-2] = tempArr[chunk_size2-1-i];
+    for (int i = 0; i < chunkSize2; i++) {
+        slice[i+chunkSize2-2] = tempArr[chunkSize2-1-i];
     }
 
     //low pass filtering cut_low=20, cut_high=70
     Eigen::VectorXd zi(b_size);
-    double largeZVector[3 * chunk_size2 - 2];
-    double newZVector[chunk_size2];
+    double largeZVector[3 * chunkSize2 - 2];
+    double newZVector[chunkSize2];
     zi(0) = 0;
-    for (int j = 0; j < 3 * chunk_size2 - 2; j++)
+    for (int j = 0; j < 3 * chunkSize2 - 2; j++)
     {
         largeZVector[j] = (b[0] * slice[j]) + zi(0);
         for (int k = 1; k < b_size; k++)
@@ -1349,14 +1433,14 @@ void calling_svm(obj& elem)
         }
     }
 
-    for(int i = 0; i < chunk_size2; i++) {
-        newZVector[i] = largeZVector[i + chunk_size2-1];
+    for(int i = 0; i < chunkSize2; i++) {
+        newZVector[i] = largeZVector[i + chunkSize2-1];
         /* Debug: print the filtered signal
         if (elem.type == "washing machine") {
-            if (i < chunk_size2 - 1) {
+            if (i < chunkSize2 - 1) {
                 printf("%.16f ,", newZVector[i]);
             }
-            else if (i == chunk_size2 - 1){
+            else if (i == chunkSize2 - 1){
                  printf("%.16f]\n", newZVector[i]);
             }
         }
@@ -1365,24 +1449,24 @@ void calling_svm(obj& elem)
     // printf("\n\n\n");
 
     // Removed: Normalize the filtered signal to [0,1]
-    // double min_val = *std::min_element(newZVector, newZVector + chunk_size2);
-    // double max_val = *std::max_element(newZVector, newZVector + chunk_size2);
-    Eigen::VectorXcd sig_amp(chunk_size2);
-    // for (int i=0;i<chunk_size2;i++)
+    // double min_val = *std::min_element(newZVector, newZVector + chunkSize2);
+    // double max_val = *std::max_element(newZVector, newZVector + chunkSize2);
+    Eigen::VectorXcd sig_amp(chunkSize2);
+    // for (int i=0;i<chunkSize2;i++)
     // {
     //     sig_amp[i] = (newZVector[i]- min_val) / (max_val - min_val + 1e-32);
     // }
-    for (int i=0;i<chunk_size2;i++)
+    for (int i=0;i<chunkSize2;i++)
     {
         sig_amp[i] = newZVector[i];
     }
 
     //Perform FFT
     Eigen::FFT<double> fft;
-    Eigen::VectorXcd Y(chunk_size2);
+    Eigen::VectorXcd Y(chunkSize2);
     fft.fwd(Y, sig_amp);
 
-    int half_length = chunk_size2 / 2;
+    int half_length = chunkSize2 / 2;
     double P1[half_length];
     for(int i=0;i<half_length;i++)
     {
@@ -1447,9 +1531,10 @@ void calling_svm(obj& elem)
     }
 
     dataLock.lock();
-    // elem.state = state; //if no buffer is used
+    //elem.state = state; //if no buffer is used
+
     // dataLock.unlock();
-    if (elem.state_history.size() >= 5) { // 500ms * 30 = 15s
+    if (elem.state_history.size() >= 1) { // 500ms * 30 = 15s
         elem.state_history.pop_front();
     }
     elem.state_history.push_back(state);
@@ -1460,7 +1545,7 @@ void calling_svm(obj& elem)
     {
         state_cnt[elem.state_history.at(i)] += 1;
     }
-    /* Debug: Buffer health
+    /*// Debug: Buffer health
     for (int i=0; i<max_state_defined; i++)
     {
        cout << state_cnt[i] << " | ";
@@ -1471,19 +1556,21 @@ void calling_svm(obj& elem)
     if (classifier == "washing machine") {
         washine_machine_state = elem.state;
     }
+
+    double coords[3] = {elem.x, elem.y, elem.z};
+    double objDistance = computeDistance(coords, uwb1Absolute);
     dataLock.unlock();
 
     //std::cout << elem.type << "'s state is " << elem.state << std::endl;
 }
 
-
-//TODO function for single VMD computation
+//Performs VMD on a single object
 int calling_vmd(obj& elem)
 {
     double startTime = ros::Time::now().toSec();
     int Fs = 1000;
     std::vector<double> unfiltered_data = elem.flattenArr();
-    if (unfiltered_data.size() <= 20 * chunk_size) {
+    if (unfiltered_data.size() <= 20 * chunkSize) {
         return 0;
     }
     int sig_length = unfiltered_data.size();
@@ -1526,6 +1613,7 @@ int calling_vmd(obj& elem)
     return 0;
 }
 
+//Iterates through database, calling SVM on nonperson objects
 int state_classifiers()
 {
     std::vector<std::thread> ThreadVector;
@@ -1557,7 +1645,7 @@ int state_classifiers()
         }
         dataLock.unlock();
 
-        ThreadVector.emplace_back([&](){usleep(500000);}); //guardian thread, 100ms(10Hz)
+        ThreadVector.emplace_back([&](){usleep(1000000);}); //TODO Check this w Ziqi
         if (ThreadVector.size())
         {
             for(auto& t: ThreadVector)
@@ -1578,12 +1666,12 @@ int state_classifiers()
     return 0;
 }
 
+//Iterates through database, calling VMS on person objects
 int respiration_est()
 {
     std::vector<std::thread> ThreadVector;
     while(1)
     {
-        //TODO conduct timing analysis here for VMD running on one frame
         dataLock.lock();
         for (int i = 0; i < database.size(); i++) {
             obj& elem = database.at(i);
@@ -1625,7 +1713,9 @@ int start_ros_spin()
     return 0;
 }
 
-
+/**
+ *  MAIN
+ */
 
 int main(int argc, char* argv[]) {
     torch::DeviceType device_type;
@@ -1675,6 +1765,5 @@ int main(int argc, char* argv[]) {
     std::thread state_classifications(state_classifiers);
     std::thread state_regressions(respiration_est);
     state_classifications.detach();
-    //state_regressions.detach();
     sensor_fusion.join();
 }

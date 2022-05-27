@@ -31,6 +31,7 @@ class obj{
 	std::deque<double*> vibration;
 	int state;
 	std::deque<int> state_history;
+	//std::deque<int> var_history;
 	int ticksInactive;
 	Rect_<float> box;
 	
