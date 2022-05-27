@@ -1575,7 +1575,7 @@ int main(int argc, char *argv[])
     if (torch::cuda::is_available())
     {
         device_type = torch::kCUDA;
-        module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
+        module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/FullSetGPU.torchscript.pt", device_type);
     }
     else
     {
