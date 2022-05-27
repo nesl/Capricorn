@@ -1,23 +1,23 @@
-//ROS INCLUDES
+// ROS INCLUDES
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
 
-//C++ Standard Includes
+// C++ Standard Includes
 #include <algorithm>
 #include <iostream>
 #include <time.h>
 #include <fstream>
-#include <iomanip> 
+#include <iomanip>
 #include <unistd.h>
 #include <set>
 #include <string>
 #include <thread>
 #include <sstream>
 
-//OpenCV Includes
+// OpenCV Includes
 #include <opencv4/opencv2/opencv.hpp>
 #include <opencv4/opencv2/core/core.hpp>
 #include <opencv4/opencv2/imgproc/imgproc.hpp>
@@ -28,14 +28,14 @@
 #include <opencv2/core/hal/interface.h>
 #include <opencv2/calib3d.hpp>
 
-//Tracker + Yolo includes
+// Tracker + Yolo includes
 #include <torch/script.h>
 #include <torch/torch.h>
 #include "Hungarian.h"
 #include "KalmanTracker.h"
 #include "data_structure.cpp"
 
-//SVM + VMD Classifier Includes
+// SVM + VMD Classifier Includes
 #include "SVM/FanClassifier.h"
 #include "SVM/VacuumClassifier.h"
 #include "SVM/WashingClassifier.h"
@@ -43,14 +43,13 @@
 #include "SVM/DrillClassifier.h"
 #include "VMD/VMD.h"
 
-
-//Eigen Includes
+// Eigen Includes
 #include <Eigen/Dense>
 #include <unsupported/Eigen/FFT>
 #include <Eigen/Eigen>
 #include <Eigen/Core>
 
-//Realsense and Custom Message Includes
+// Realsense and Custom Message Includes
 #include "std_msgs/Float32MultiArray.h"
 #include <librealsense2/rs.hpp> // Include RealSense Cross Platform API
 #include "timeArr_msgs/FloatArray.h"
@@ -65,7 +64,7 @@ using namespace rs2;
  * Struct definitions
  * */
 
-//Used in the tracker, usually initialized as tb
+// Used in the tracker, usually initialized as tb
 typedef struct TrackingBox
 {
     int frame;
@@ -75,8 +74,9 @@ typedef struct TrackingBox
     double score;
 } TrackingBox;
 
-//Used in distance clustering and calculation from the lidar depth stream
-struct Bin {
+// Used in distance clustering and calculation from the lidar depth stream
+struct Bin
+{
     int numOccurrence = 0;
     double lowerBound;
     double totalDepth = 0;
@@ -85,21 +85,21 @@ struct Bin {
 /**
  * Macros and Constants
  */
-#define b_size 85 //b_size used for filtering cutoff
-#define MULTI_VIEW_UWB 0 //MULTI_VIEW for two UWB sensors
-#define COMPLEX_EVENT 0  //COMPLEX_EVENT for human + washing machine interaction
-//UWB chunk size
-const int chunkSize = 1024; 
+#define b_size 85        // b_size used for filtering cutoff
+#define MULTI_VIEW_UWB 1 // MULTI_VIEW for two UWB sensors
+#define COMPLEX_EVENT 1  // COMPLEX_EVENT for human + washing machine interaction
+// UWB chunk size
+const int chunkSize = 1024;
 const int chunkSize2 = 1024;
-//Tracking max age and min hit parameters
+// Tracking max age and min hit parameters
 const int max_age = 5;
 const int min_hits = 3;
-const double iouThreshold = 0.3; 
-static double b[b_size] = {0.0095,-0.0010,-0.0012,-0.0015,-0.0019,-0.0024,-0.0028,-0.0032,-0.0035,-0.0036,-0.0035,-0.0031,-0.0024,-0.0015,-0.0003,0.0012,0.0028,0.0045,0.0063,0.0080,0.0094,0.0105,0.0111,0.0112,0.0105,0.0091,0.0068,0.0037,-0.0003,   -0.0050,-0.0105,-0.0166,-0.0232,-0.0300,-0.0369,-0.0437,-0.0501,-0.0560,-0.0611,-0.0652,-0.0683,-0.0702,0.9291,-0.0702,-0.0683,-0.0652,-0.0611,-0.0560,-0.0501,-0.0437,-0.0369,-0.0300,-0.0232,-0.0166,-0.0105   -0.0050,   -0.0003,    0.0037,    0.0068,    0.0091,    0.0105,    0.0112,    0.0111,    0.0105,0.0094,0.0080,0.0063,0.0045,0.0028,0.0012,-0.0003,-0.0015,-0.0024,-0.0031,-0.0035,-0.0036,-0.0035,-0.0032,-0.0028,-0.0024,-0.0019,-0.0015,-0.0012,-0.0010,0.0095};
-//Model input image height and width
+const double iouThreshold = 0.3;
+static double b[b_size] = {0.0095, -0.0010, -0.0012, -0.0015, -0.0019, -0.0024, -0.0028, -0.0032, -0.0035, -0.0036, -0.0035, -0.0031, -0.0024, -0.0015, -0.0003, 0.0012, 0.0028, 0.0045, 0.0063, 0.0080, 0.0094, 0.0105, 0.0111, 0.0112, 0.0105, 0.0091, 0.0068, 0.0037, -0.0003, -0.0050, -0.0105, -0.0166, -0.0232, -0.0300, -0.0369, -0.0437, -0.0501, -0.0560, -0.0611, -0.0652, -0.0683, -0.0702, 0.9291, -0.0702, -0.0683, -0.0652, -0.0611, -0.0560, -0.0501, -0.0437, -0.0369, -0.0300, -0.0232, -0.0166, -0.0105 - 0.0050, -0.0003, 0.0037, 0.0068, 0.0091, 0.0105, 0.0112, 0.0111, 0.0105, 0.0094, 0.0080, 0.0063, 0.0045, 0.0028, 0.0012, -0.0003, -0.0015, -0.0024, -0.0031, -0.0035, -0.0036, -0.0035, -0.0032, -0.0028, -0.0024, -0.0019, -0.0015, -0.0012, -0.0010, 0.0095};
+// Model input image height and width
 const int imgW = 320;
 const int imgH = 320;
-const int deletionTicks = 5; //How many frames before deletion from database
+const int deletionTicks = 5; // How many frames before deletion from database
 
 /**
  * Variables for complex event detection
@@ -128,112 +128,124 @@ vector<TrackingBox> frameTrackingResult;
 unsigned int trkNum = 0;
 unsigned int detNum = 0;
 
-//Yolo model global variables
+// Yolo model global variables
 torch::jit::script::Module module;
 std::vector<std::string> classnames;
 torch::Tensor imgTensor;
 bool gotTransform = false;
 
-//In memory database
+// In memory database
 vector<obj> database;
 
-//Complex array used for UWB, prevents allocation of array each time
+// Complex array used for UWB, prevents allocation of array each time
 std::complex<double> complexArr1[120][chunkSize];
 std::complex<double> complexArr2[120][chunkSize];
 
-//Mutex Lock for thread safety
+// Mutex Lock for thread safety
 std::mutex dataLock;
 
-//Camera Parameters
+// Camera Parameters
 float fx = 603.824;
 float ppx = 315.726;
 float ppy = 238.551;
 float fy = 604.016;
 float camParam[3][3] = {{fx, 0, ppx},
-                            {0, fy, ppy},
-                            {0, 0, 1}};
+                        {0, fy, ppy},
+                        {0, 0, 1}};
 
 Eigen::Matrix3d rotationMatrix;
 Eigen::Vector3d translationMatrix(0, 0, 0);
 Eigen::Vector3d zeroVectorTransformed;
 rs2_intrinsics intrin;
 
-//UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
+// UWB Location in AprilTag coordinates, uwb1Absolute is set automatically
 double uwb1Absolute[3] = {0, 0, 0};
-double uwb2Absolute[3] = { -0.963236, -0.126797, 1.40613};
+double uwb2Absolute[3] = {-0.963236, -0.126797, 1.40613};
 
-bool uwb1Used = true; //Used for multi view
+bool uwb1Used = true; // Used for multi view
 
 /**
  * Helper functions
  */
 
-double computeMean(double* arr) {
+double computeMean(double *arr)
+{
     double mean = 0;
-    for (int i = 0; i < chunkSize; i++) {
+    for (int i = 0; i < chunkSize; i++)
+    {
         mean += arr[i];
     }
     return mean / chunkSize;
 }
 
-double computeVariance(double* arr) {
+double computeVariance(double *arr)
+{
     double mean = computeMean(arr);
     double variance = 0;
-    for (int i = 0; i < chunkSize; i++) {
+    for (int i = 0; i < chunkSize; i++)
+    {
         variance += (arr[i] - mean) * (arr[i] - mean);
     }
     return variance / chunkSize;
 }
 
-double computeHHI(double* arr) {
+double computeHHI(double *arr)
+{
     Eigen::VectorXcd sig_amp(chunkSize);
-    for (int i=0;i<chunkSize;i++)
+    for (int i = 0; i < chunkSize; i++)
     {
         sig_amp[i] = arr[i];
     }
-    //Perform FFT
+    // Perform FFT
     Eigen::FFT<double> fft;
     Eigen::VectorXcd Y(chunkSize);
     fft.fwd(Y, sig_amp);
     int half_length = chunkSize / 2;
     double P1[half_length];
-    for(int i=0;i<half_length;i++)
+    for (int i = 0; i < half_length; i++)
     {
-        P1[i] = std::abs(Y[i+1]);
+        P1[i] = std::abs(Y[i + 1]);
     }
     double sum = 0;
-    for(int i=0;i<half_length;i++)
+    for (int i = 0; i < half_length; i++)
     {
         sum += P1[i];
     }
     double hhi = 0;
-    for(int i=0;i<half_length;i++)
+    for (int i = 0; i < half_length; i++)
     {
-        hhi += (P1[i]/sum) * (P1[i]/sum);
+        hhi += (P1[i] / sum) * (P1[i] / sum);
     }
     return hhi;
 }
 
-double computeDistance(double* pt1, double* pt2) {
-    return sqrt( (pt1[0] - pt2[0]) * (pt1[0] - pt2[0]) + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]) + (pt1[2] - pt2[2]) * (pt1[2] - pt2[2]));
+double computeDistance(double *pt1, double *pt2)
+{
+    return sqrt((pt1[0] - pt2[0]) * (pt1[0] - pt2[0]) + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]) + (pt1[2] - pt2[2]) * (pt1[2] - pt2[2]));
 }
 
-int calibration(double objDepth){
-    if(objDepth<1.05){
+int calibration(double objDepth)
+{
+    if (objDepth < 1.05)
+    {
         return -2;
     }
-    else if(objDepth<1.1){
+    else if (objDepth < 1.1)
+    {
         return -1;
-    } 
-    else if(objDepth<1.3){
+    }
+    else if (objDepth < 1.3)
+    {
         return 0;
-    } 
-    else if(objDepth<2.3){
+    }
+    else if (objDepth < 2.3)
+    {
         return 1;
-    } 
-    else{
+    }
+    else
+    {
         return 2;
-    } 
+    }
 }
 
 // Computes IOU between two bounding boxes
@@ -241,188 +253,119 @@ double GetIOU(Rect_<float> bb_test, Rect_<float> bb_gt)
 {
     float in = (bb_test & bb_gt).area();
     float un = bb_test.area() + bb_gt.area() - in;
-
     if (un < DBL_EPSILON)
         return 0;
-
     return (double)(in / un);
 }
 
-double getDepth(const boost::shared_ptr<const sensor_msgs::Image> depthImg, int lowerX, int upperX, int lowerY, int upperY) {
+double getDepth(const boost::shared_ptr<const sensor_msgs::Image> depthImg, int lowerX, int upperX, int lowerY, int upperY)
+{
     int middleX = (lowerX + upperX) / 2;
     int middleY = (lowerY + upperY) / 2;
-    double origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleY + middleX) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleY + middleX)])));
-    /*
-    if (origDepth > 2) {
-        double totalDepth = 0;
-        int count = 0;
-        for(int i = middleY - 4; i < middleY + 4; i++) {
-            for (int j = middleX - 4; j < middleX + 4; j++) {
-                double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)])));
-                if (std::abs(depthAtPixel - origDepth) < 0.03) {
-                    totalDepth += depthAtPixel;
-                    count++;
-                }
-            }
-        }
-        return totalDepth / count;
+    double origDepth = 0.00025 * ((((uint16_t)depthImg->data[2 * (depthImg->width * middleY + middleX) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleY + middleX)])));
+    Bin values[500];
+    for (int i = 0; i < 500; i++)
+    {
+        values[i].lowerBound = 0.01 * i;
+        values[i].totalDepth = 0;
+        values[i].numOccurrence = 0;
     }
-    else {
-        */
-        //Create distance bins of 1 cm
-        Bin values[500];
-        for (int i = 0; i < 500; i++) {
-            values[i].lowerBound = 0.01 * i;
-            values[i].totalDepth = 0;
-            values[i].numOccurrence = 0;
-        }
-        //Prevents invalid values from being used for depth processing
-        if (upperX > 640 || upperY > 480) {
-            upperX = 640;
-            upperY = 480;
-        }
-        
-        
-        //Loop through the area in the boxes and add the depth to the appropriate bin
-        for (int i = lowerY; i < upperY; i++) {
-            for (int j = lowerX; j < upperX; j+= 3) {
-                uint16_t depthAtPixel = (((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)]));
-                double depth = 0.00025 * depthAtPixel;
-                if (depth > 4.3 || depth == 0) {
-                    continue;
-                }
-                int binNum = (int) (depth * 100);
-                values[binNum].totalDepth += depth;
-                values[binNum].numOccurrence++;
-            }
-        } 
+    // Prevents invalid values from being used for depth processing
+    if (upperX > 640 || upperY > 480)
+    {
+        upperX = 640;
+        upperY = 480;
+    }
 
-        //Vector holding the significant clusters found
-        std::vector<Bin> sigPts;
-        bool newDetection = true;
-        bool secondChance = true;
-        //Loop through the bins 
-        for (int i = 2; i < 500; i++) {
-            double avgDistance = values[i].totalDepth / values[i].numOccurrence;
-            int peakValue = 20 - i / 100; //Number of points in bin to be considered significant, scales based on distance because further objects are "smaller"
-            //Found new peak, push onto sigPts
-            if (newDetection && values[i].numOccurrence > peakValue && values[i - 1].numOccurrence > peakValue) {
-                sigPts.push_back(values[i - 1]);
-                sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
-                sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
-                newDetection = false;
+    // Loop through the area in the boxes and add the depth to the appropriate bin
+    for (int i = lowerY; i < upperY; i++)
+    {
+        for (int j = lowerX; j < upperX; j += 3)
+        {
+            uint16_t depthAtPixel = (((uint16_t)depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)]));
+            double depth = 0.00025 * depthAtPixel;
+            if (depth > 4.3 || depth == 0)
+            {
                 continue;
             }
-            //Peaking continues, update the element
-            if (!newDetection && values[i].numOccurrence > peakValue) {
-                sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
-                sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
-            }
-            //No peak found, reset for new peak
-            else if (!newDetection) {
-                newDetection = true;
-            }
+            int binNum = (int)(depth * 100);
+            values[binNum].totalDepth += depth;
+            values[binNum].numOccurrence++;
         }
-        //No peaks found, return
-        if (sigPts.size() == 0) {
-            return 0;
-        }
-        //Loop through and find the most significant bins (the one with most points)
-        Bin maxBin;
-        for (int i = 0; i < sigPts.size(); i++) { //Todo change back to 1
-            if (sigPts.at(i).numOccurrence > 5) {
-                maxBin = sigPts.at(i);
-                break;
-            }
-        }
-        
-        //Get the average distance of that bin and return
-        return maxBin.totalDepth / maxBin.numOccurrence;
-   // }
-     
-}
-
-//Returns the location of the object's centroid (x,y,z) in APRILTAG coordinates in variable arr
-double getCentroidTransformed( const boost::shared_ptr<const sensor_msgs::Image> colorImg, const boost::shared_ptr<const sensor_msgs::Image> depthImg, Rect_<float> box, double* arr) {
-    
-    int middleU = (int) (box.tl().x + box.br().x) / 2.0;
-    int middleV = (int) (box.tl().y + box.br().y) / 2.0;
-    /*
-    double count = 0;
-    double xTotal = 0;
-    double yTotal = 0;
-    double zTotal = 0;
-    double origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV + middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
-    //Find an acceptable point to start at
-
-    while ( (origDepth == 0 || origDepth > 4)  && !(middleU < box.tl().x || middleV < box.tl().y|| middleU > box.br().x  || middleV > box.br().y) ) {
-        middleU += rand() % 3 - 1;
-        middleV += rand() % 3 - 1;
-        origDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * middleV+ middleU) + 1]) << 8) | ((uint16_t)(depthImg->data[2 * (depthImg->width * middleV + middleU)])));
     }
 
-    if (middleU < box.tl().x || middleV < box.tl().y|| middleU > box.br().x  || middleV > box.br().y) {
-        arr[0] = arr[1] = arr[2] = -1;
-        std::cout << "Object not found in bbox"  << std::endl;
+    // Vector holding the significant clusters found
+    std::vector<Bin> sigPts;
+    bool newDetection = true;
+    bool secondChance = true;
+    // Loop through the bins
+    for (int i = 2; i < 500; i++)
+    {
+        double avgDistance = values[i].totalDepth / values[i].numOccurrence;
+        int peakValue = 20 - i / 100; // Number of points in bin to be considered significant, scales based on distance because further objects are "smaller"
+        // Found new peak, push onto sigPts
+        if (newDetection && values[i].numOccurrence > peakValue && values[i - 1].numOccurrence > peakValue)
+        {
+            sigPts.push_back(values[i - 1]);
+            sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
+            sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
+            newDetection = false;
+            continue;
+        }
+        // Peaking continues, update the element
+        if (!newDetection && values[i].numOccurrence > peakValue)
+        {
+            sigPts.at(sigPts.size() - 1).totalDepth += values[i].totalDepth;
+            sigPts.at(sigPts.size() - 1).numOccurrence += values[i].numOccurrence;
+        }
+        // No peak found, reset for new peak
+        else if (!newDetection)
+        {
+            newDetection = true;
+        }
+    }
+    // No peaks found, return
+    if (sigPts.size() == 0)
+    {
         return 0;
     }
-
-    float minDepth = origDepth;
-    for (int i = middleV - 1; i < middleV + 2; i++) {
-        for (int j = middleU - 1; j < middleU + 2; j++) {
-            float currDepth = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * i + j) + 1]) << 8)
-            | ((uint16_t)(depthImg->data[2 * (depthImg->width * i + j)])));
-            if (minDepth < currDepth && currDepth > 0.5) {
-                minDepth = currDepth;
-            }
+    // Loop through and find the most significant bins (the one with most points)
+    Bin maxBin;
+    for (int i = 0; i < sigPts.size(); i++)
+    { // Todo change back to 1
+        if (sigPts.at(i).numOccurrence > 5)
+        {
+            maxBin = sigPts.at(i);
+            break;
         }
     }
+    // Get the average distance of that bin and return
+    return maxBin.totalDepth / maxBin.numOccurrence;
+}
 
-    //Go around that point and compute the distance
-    for (int j = middleV - 2; j < middleV + 2; j++) {
-        for (int k = middleU - 2; k < middleU + 2; k++) {
-            double depthAtPixel = 0.00025 * ((((uint16_t) depthImg->data[2 * (depthImg->width * j + k) + 1]) << 8) |
-                ((uint16_t)(depthImg->data[2 * (depthImg->width * j + k)])));
-            if ((std::abs(depthAtPixel - minDepth) < 0.3)) {
-                float point[3];
-                float pixel[2] = {float(k), float(j)};
-                rs2_deproject_pixel_to_point(point, &intrin, pixel, depthAtPixel);
-                // std::cout << point[2] << " " << depthAtPixel << std::endl;
-                //Transform to AprilTag coords
-                Eigen::Vector3d coordVec(point[0] + translationMatrix(0), point[1] + translationMatrix(1), point[2] + translationMatrix(2));
-                coordVec = rotationMatrix * coordVec;
-                xTotal += coordVec(0);
-                yTotal += coordVec(1);
-                zTotal += coordVec(2);
-                count++;
-            }
-        }
-    }
-    //Place result in arr
-    arr[0] = xTotal / count;
-    arr[1] = yTotal / count;
-    arr[2] = zTotal / count;
-    return computeDistance(arr, uwb1Absolute);
-    */
+// Returns the location of the object's centroid (x,y,z) in APRILTAG coordinates in variable arr
+void getCentroidTransformed(const boost::shared_ptr<const sensor_msgs::Image> colorImg, const boost::shared_ptr<const sensor_msgs::Image> depthImg, Rect_<float> box, double *arr)
+{
+
+    int middleU = (int)(box.tl().x + box.br().x) / 2.0;
+    int middleV = (int)(box.tl().y + box.br().y) / 2.0;
     double depth = getDepth(depthImg, box.tl().x, box.br().x, box.tl().y, box.br().y);
     float point[3];
     float pixel[2] = {float(middleU), float(middleV)};
     rs2_deproject_pixel_to_point(point, &intrin, pixel, depth);
-    // std::cout << point[2] << " " << depthAtPixel << std::endl;
-    //Transform to AprilTag coords
+    // Transform to AprilTag coords
     Eigen::Vector3d coordVec(point[0] + translationMatrix(0), point[1] + translationMatrix(1), point[2] + translationMatrix(2));
     coordVec = rotationMatrix * coordVec;
     arr[0] = coordVec(0);
     arr[1] = coordVec(1);
     arr[2] = coordVec(2);
-    return 0.0;
 }
 
 /**
  * Vision Pipeline Helper Functions
  */
 
-//Original NMS
+// Original NMS
 std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_thresh = 0.2, float iou_thresh = 0.2)
 {
     std::vector<torch::Tensor> output;
@@ -433,7 +376,8 @@ std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_
         torch::Tensor scores = pred.select(1, 4) * std::get<0>(torch::max(pred.slice(1, 5, pred.sizes()[1]), 1));
 
         pred = torch::index_select(pred, 0, torch::nonzero(scores > score_thresh).select(1, 0));
-        if (pred.sizes()[0] == 0) {
+        if (pred.sizes()[0] == 0)
+        {
             output.push_back(pred);
             continue;
         }
@@ -488,7 +432,7 @@ std::vector<torch::Tensor> non_max_suppression(torch::Tensor preds, float score_
     return output;
 }
 
-//Soft NMS for better occluded object detection
+// Soft NMS for better occluded object detection
 std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float score_thresh = 0.2, float iou_thresh = 0.6)
 {
     // pred: [# of images, bounding boxs, [x,y,w,h,obj_conf, class1_conf, class2_conf...]] e.g.[1, 15000, 10]
@@ -498,8 +442,8 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
         torch::Tensor pred = preds.select(0, i);
 
         // Filter by scores
-        torch::Tensor scores = pred.select(1, 4) * std::get<0>(torch::max(pred.slice(1, 5, pred.sizes()[1]), 1)); //conf = obj_conf * cls_conf
-        pred = torch::index_select(pred, 0, torch::nonzero(scores > score_thresh).select(1, 0)); // remove bounding boxes with too-low threashold
+        torch::Tensor scores = pred.select(1, 4) * std::get<0>(torch::max(pred.slice(1, 5, pred.sizes()[1]), 1)); // conf = obj_conf * cls_conf
+        pred = torch::index_select(pred, 0, torch::nonzero(scores > score_thresh).select(1, 0));                  // remove bounding boxes with too-low threashold
         if (pred.sizes()[0] == 0)
             continue;
 
@@ -511,16 +455,16 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
 
         // Computing scores and classes
         std::tuple<torch::Tensor, torch::Tensor> max_tuple = torch::max(pred.slice(1, 5, pred.sizes()[1]), 1); // confidence of the most probable class
-        pred.select(1, 4) = pred.select(1, 4) * std::get<0>(max_tuple); // conf = obj_conf * cls_conf
-        pred.select(1, 5) = std::get<1>(max_tuple); // class index
+        pred.select(1, 4) = pred.select(1, 4) * std::get<0>(max_tuple);                                        // conf = obj_conf * cls_conf
+        pred.select(1, 5) = std::get<1>(max_tuple);                                                            // class index
 
         torch::Tensor dets = pred.slice(1, 0, 6);
 
         torch::Tensor keep = torch::empty({dets.sizes()[0]});
         torch::Tensor areas = (dets.select(1, 3) - dets.select(1, 1)) * (dets.select(1, 2) - dets.select(1, 0));
-        torch::Tensor classes = dets.select(1,5);
+        torch::Tensor classes = dets.select(1, 5);
         std::vector<int> idx_vec;
-        for (int j=0; j< dets.sizes()[0]; j++)
+        for (int j = 0; j < dets.sizes()[0]; j++)
         {
             idx_vec.push_back(j);
         }
@@ -562,7 +506,8 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
             scores_discount.index_select(0, torch::nonzero(obj_type_diff != 0).select(1, 0)) = 1; // no discont for boxes with differnt classes
 
             scores = scores * scores_discount;
-            if(!torch::nonzero(scores > score_thresh).select(1, 0).sizes()[0]) break;
+            if (!torch::nonzero(scores > score_thresh).select(1, 0).sizes()[0])
+                break;
         }
         keep = keep.toType(torch::kInt64);
         output.push_back(torch::index_select(dets, 0, keep.slice(0, 0, count)));
@@ -570,63 +515,83 @@ std::vector<torch::Tensor> soft_non_max_suppression(torch::Tensor preds, float s
     return output;
 }
 
-//Convert integer state to string depending on object type
-std::string getState(std::string classifier, int state) {
-    if (state == -1) {
+// Convert integer state to string depending on object type
+std::string getState(std::string classifier, int state)
+{
+    if (state == -1)
+    {
         return "Estimating...";
     }
-    if (classifier == "vacuum") {
-        if (state == 0) {
+    if (classifier == "vacuum")
+    {
+        if (state == 0)
+        {
             return "Idle";
         }
-        else {
+        else
+        {
             return "Sweeping";
         }
     }
-    else if (classifier == "washing machine") {
-        if (state == 0) {
+    else if (classifier == "washing machine")
+    {
+        if (state == 0)
+        {
             return "Idle";
         }
-        else if (state == 1) {
+        else if (state == 1)
+        {
             return "Washing";
         }
-        else {
+        else
+        {
             return "Drying";
         }
     }
-    else if (classifier == "standing fan") {
-        if (state == 0) {
+    else if (classifier == "standing fan")
+    {
+        if (state == 0)
+        {
             return "Idle";
         }
-        else if (state == 1) {
+        else if (state == 1)
+        {
             return "Speed 1";
         }
-        else if (state == 2) {
+        else if (state == 2)
+        {
             return "Speed 2";
         }
-        else {
+        else
+        {
             return "Speed 3";
         }
     }
-    else if (classifier == "person") {
-        if (state == 0) {
+    else if (classifier == "person")
+    {
+        if (state == 0)
+        {
             return "bpm estimating";
         }
-        else {
+        else
+        {
             return std::to_string(state) + " bpm";
         }
     }
-    else {
-        if (state == 0) {
+    else
+    {
+        if (state == 0)
+        {
             return "off";
         }
-        else {
+        else
+        {
             return "on";
         }
     }
 }
 
-//Gets the transform matrix from LiDAR to apriltag frame, called once at the beginning of program execution
+// Gets the transform matrix from LiDAR to apriltag frame, called once at the beginning of program execution
 void getTransform(cv::Mat cameraMatrix, cv::Mat distCoeffs, cv::Mat image)
 {
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_36h11);
@@ -658,7 +623,6 @@ void getTransform(cv::Mat cameraMatrix, cv::Mat distCoeffs, cv::Mat image)
         uwb1Absolute[1] = zeroVectorTransformed(1);
         uwb1Absolute[2] = zeroVectorTransformed(2);
     }
-
 }
 
 /**
@@ -666,71 +630,75 @@ void getTransform(cv::Mat cameraMatrix, cv::Mat distCoeffs, cv::Mat image)
  */
 
 #if MULTI_VIEW_UWB
-//UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database
-//depending on whether there is aliasing in the first UWB sensor
+// UWB function takes in two synchronized messages from two UWB sensors, processes the chunk, and appends the correct slice to the in memory database
+// depending on whether there is aliasing in the first UWB sensor
 void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, const boost::shared_ptr<const timeArr_msgs::FloatArray> msg2)
 {
-    //Msg has IQ data, we need to create a complexArray that has the elements matched up
-	int vectorCount = 0;
-	for (int i = 0; i < chunkSize; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr1[j][i] = std::complex<double>(msg1->data.at(vectorCount), msg1->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
+    // Msg has IQ data, we need to create a complexArray that has the elements matched up
+    int vectorCount = 0;
+    for (int i = 0; i < chunkSize; i++)
+    {
+        for (int j = 0; j < 120; j++)
+        {
+            // Fills complex array
+            complexArr1[j][i] = std::complex<double>(msg1->data.at(vectorCount), msg1->data.at(vectorCount + 120));
+            vectorCount++;
+        }
+        vectorCount += 120;
+    }
+    // Note that complexArr has each distance bin as a row, each column is time (1s)
 
-    //Compute phase difference in first distance bin
-	double referencePhase1 = 0;
-	for (int i = 0; i < chunkSize; i++)
-	{
-		referencePhase1 += std::arg(complexArr1[0][i]);
-	}
+    // Compute phase difference in first distance bin
+    double referencePhase1 = 0;
+    for (int i = 0; i < chunkSize; i++)
+    {
+        referencePhase1 += std::arg(complexArr1[0][i]);
+    }
 
-    //Compute average
-	referencePhase1 /= chunkSize;
+    // Compute average
+    referencePhase1 /= chunkSize;
 
-    //Repeat for second UWB chunk, we gotta synch the uwbs :(
+    // Repeat for second UWB chunk, we gotta synch the uwbs :(
     vectorCount = 0;
     for (int i = 0; i < chunkSize; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr2[j][i] = std::complex<double>(msg2->data.at(vectorCount), msg2->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
+    {
+        for (int j = 0; j < 120; j++)
+        {
+            // Fills complex array
+            complexArr2[j][i] = std::complex<double>(msg2->data.at(vectorCount), msg2->data.at(vectorCount + 120));
+            vectorCount++;
+        }
+        vectorCount += 120;
+    }
+    // Note that complexArr has each distance bin as a row, each column is time (1s)
 
-    //Compute phase difference in first distance bin
-	double referencePhase2 = 0;
-	for (int i = 0; i < chunkSize; i++)
-	{
-		referencePhase2 += std::arg(complexArr2[0][i]);
-	}
+    // Compute phase difference in first distance bin
+    double referencePhase2 = 0;
+    for (int i = 0; i < chunkSize; i++)
+    {
+        referencePhase2 += std::arg(complexArr2[0][i]);
+    }
 
-    //Compute average
-	referencePhase2 /= chunkSize;
+    // Compute average
+    referencePhase2 /= chunkSize;
 
-    //Decide whether uwb1 is acceptable to be used for uwb computation
+    // Decide whether uwb1 is acceptable to be used for uwb computation
     dataLock.lock();
     int dataSize = database.size();
-    double distanceUWB1[dataSize]; //Array of distances from UWB
-    for (int i = 0; i < dataSize; i++) {
+    double distanceUWB1[dataSize]; // Array of distances from UWB
+    for (int i = 0; i < dataSize; i++)
+    {
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
         distanceUWB1[i] = computeDistance(tempPoint, uwb1Absolute);
     }
     dataLock.unlock();
     bool uwb1Acceptable = true;
-    for (int i = 0; i < dataSize - 1; i++) {
-        for (int j = i + 1; j < dataSize; j++) {
-            if (abs(distanceUWB1[i] - distanceUWB1[j]) < 0.3) {
+    for (int i = 0; i < dataSize - 1; i++)
+    {
+        for (int j = i + 1; j < dataSize; j++)
+        {
+            if (abs(distanceUWB1[i] - distanceUWB1[j]) < 0.3)
+            {
                 uwb1Acceptable = false;
             }
         }
@@ -738,95 +706,45 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
     uwb1Used = uwb1Acceptable;
 
     dataLock.lock();
-	//Take slice of data for each entry in the database
-	for (int i = 0; i < database.size(); i++) {
+    // Take slice of data for each entry in the database
+    for (int i = 0; i < database.size(); i++)
+    {
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
-        //Get distance from the UWB
-		double objDepth = uwb1Acceptable ? computeDistance(tempPoint, uwb1Absolute) : computeDistance(tempPoint, uwb2Absolute);
+        // Get distance from the UWB
+        double objDepth = uwb1Acceptable ? computeDistance(tempPoint, uwb1Absolute) : computeDistance(tempPoint, uwb2Absolute);
         int adj = 0;
         adj = calibration(objDepth);
-        if (!uwb1Acceptable) {adj-=2;} //compensate for UWB2 distance estimation error
-        //Converts to a UWB index
-		int index = std::round((objDepth - 0.3) / 0.0514) + adj; 
-
-        //Converts to a UWB index
-        double* slice = new double[chunkSize];
-
-        /*
-        double varArr[5];
-        for (int j = index - 2; j <= index + 2; j++) {
-            for (int k = 0; k < chunkSize; k++) {
-                if (uwb1Acceptable) {
-                    slice[k] = std::abs(complexArr1[j][k]);
-                }
-                else {
-                    slice[k] = std::abs(complexArr2[j][k]);
-                }
-            }
-            varArr[j - index + 2] = computeVariance(slice);
-            // varArr[j - index + 2] = computeHHI(slice);
-        }
-        double maxVal = 0;
-       
-        // int maxIndex = 0;
-        int idx_adj = 0;
-        for (int j = 0; j < 5; j++) {
-            if (varArr[j] > maxVal) {
-                maxVal = varArr[j];
-                // maxIndex = j + index - 2;
-                idx_adj = j - 2;  
-            }
-        }
-        
-        // database.at(i).var_history.push_back(idx_adj);
-        // if (database.at(i).var_history.size()>5){
-        //     database.at(i).var_history.pop_front();
-        // }
-        // idx_adj = 0;
-        // for (int j = 0; j < database.at(i).var_history.size(); j++) {
-        //     idx_adj += database.at(i).var_history[j];
-        // }
-        // idx_adj = (int)(idx_adj/5.0) ;
-        // for (int j = 0; j < database.at(i).var_history.size(); j++) {
-        //     cout << database.at(i).var_history[j] << ",";
-        // }
-        // cout << endl << idx_adj << endl;
-        
-
-        if (objDepth < 1.5) {
-            for (int j = 0; j < 5; j++) {
-                std::cout << varArr[j] << ",";
-            }
-        }
-
-        index += idx_adj;
-        cout << index<< endl;
-        */
-        
-        //Compute phase difference in each element
+        if (!uwb1Acceptable)
+        {
+            adj -= 2;
+        } // compensate for UWB2 distance estimation error
+        // Converts to a UWB index
+        int index = std::round((objDepth - 0.3) / 0.0514) + adj;
+        double *slice = new double[chunkSize];
+        // Compute phase difference in each element
         for (int j = 0; j < chunkSize; j++)
         {
-            if (uwb1Acceptable) {
+            if (uwb1Acceptable)
+            {
                 double phaseDiff = referencePhase1 - std::arg(complexArr1[0][j]);
                 std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
                 std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
-                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
+                slice[j] = std::abs(shiftedValue); // Fill slice with the abs value of the shifted complex numbers
             }
-            else {
+            else
+            {
                 double phaseDiff = referencePhase2 - std::arg(complexArr2[0][j]);
                 std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
                 std::complex<double> shiftedValue(complexArr2[index][j] * phaseShift);
-                slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
+                slice[j] = std::abs(shiftedValue); // Fill slice with the abs value of the shifted complex numbers
             }
         }
-        if (database.at(i).vibration.size() >= 30) {
+        if (database.at(i).vibration.size() >= 30)
+        {
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
         database.at(i).vibration.emplace_back(slice);
-
     }
     dataLock.unlock();
 }
@@ -834,92 +752,50 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg1, c
 #else
 void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 {
+    // Msg has IQ data, we need to create a complexArray that has the elements matched up
+    int vectorCount = 0;
+    for (int i = 0; i < chunkSize; i++)
+    {
+        for (int j = 0; j < 120; j++)
+        {
+            // Fills complex array
+            complexArr1[j][i] = std::complex<double>(msg->data.at(vectorCount), msg->data.at(vectorCount + 120));
+            vectorCount++;
+        }
+        vectorCount += 120;
+    }
 
-    //Msg has IQ data, we need to create a complexArray that has the elements matched up
-	int vectorCount = 0;
-	for (int i = 0; i < chunkSize; i++)
-	{
-		for (int j = 0; j < 120; j++)
-		{
-            //Fills complex array
-			complexArr1[j][i] = std::complex<double>(msg->data.at(vectorCount), msg->data.at(vectorCount + 120));
-			vectorCount++;
-		}
-		vectorCount += 120;
-	}
-    //Note that complexArr has each distance bin as a row, each column is time (1s)
+    // Compute phase difference in first distance bin
+    double referencePhase = 0;
+    for (int i = 0; i < chunkSize; i++)
+    {
+        referencePhase += std::arg(complexArr1[0][i]);
+    }
 
-    //Compute phase difference in first distance bin
-	double referencePhase = 0;
-	for (int i = 0; i < chunkSize; i++)
-	{
-		referencePhase += std::arg(complexArr1[0][i]);
-	}
-
-    //Compute average
-	referencePhase /= chunkSize;
+    // Compute average
+    referencePhase /= chunkSize;
     dataLock.lock();
-	//Take slice of data for each entry in the database
-   
-	for (int i = 0; i < database.size(); i++) {
+    // Take slice of data for each entry in the database
+
+    for (int i = 0; i < database.size(); i++)
+    {
         double tempPoint[3] = {database.at(i).x, database.at(i).y, database.at(i).z};
-		double objDepth = computeDistance(tempPoint, uwb1Absolute);
-        //Get index corresponding to the given distance from lidar
+        double objDepth = computeDistance(tempPoint, uwb1Absolute);
+        // Get index corresponding to the given distance from lidar
         int adj = 0;
         adj = calibration(objDepth);
-		int index = std::round((objDepth - 0.3) / 0.0514) + adj; 
-
-        //This is probably useless, please ignore
-        double* slice = new double[chunkSize];
-        //Compute phase difference in each element
-        /*
-        double varArr[5];
-        for (int j = index - 2; j <= index + 2; j++) {
-            for (int k = 0; k < chunkSize; k++) {
-                slice[k] = std::abs(complexArr1[j][k]);
-            }
-            varArr[j - index + 2] = computeVariance(slice);
-        }
-        double maxVal = 0;
-        int indexMax = 0;
-        for (int j = 0; j < 5; j++) {
-            if (varArr[j] > maxVal) {
-                maxVal = varArr[j];
-                indexMax = j + index - 2;
-            }
-        }
-        if (objDepth > 2.1) {
-            for (int j = 0; j < 5; j++) {
-                std::cout << varArr[j];
-            }
-        }
-        std::cout << std::endl;
-        //std::cout << "Index at " << indexMax <<  "Prev index at " << index << std::endl;
-        index = indexMax;
-        */
-        
+        int index = std::round((objDepth - 0.3) / 0.0514) + adj;
+        double *slice = new double[chunkSize];
+        // Compute phase difference in each element
         for (int j = 0; j < chunkSize; j++)
         {
             double phaseDiff = referencePhase - std::arg(complexArr1[0][j]);
             std::complex<double> phaseShift(cos(phaseDiff), sin(phaseDiff));
             std::complex<double> shiftedValue(complexArr1[index][j] * phaseShift);
-            slice[j] = std::abs(shiftedValue); //Fill slice with the abs value of the shifted complex numbers
-
+            slice[j] = std::abs(shiftedValue); // Fill slice with the abs value of the shifted complex numbers
         }
-        if (database.at(i).vibration.size() >= 30) { //It was 120
-        /* print all the data in the buffer
-        if (database.at(i).type == "washing machine" && database.at(i).state == 1)
+        if (database.at(i).vibration.size() >= 30)
         {
-            for (int m=0; m<20; m++)
-            {
-                for (int n=0; n<1024; n++)
-                {
-                    printf("%.16f ,", database.at(i).vibration.at(m)[n]);
-                }
-            }
-        }
-        exit(0);
-        */  
             delete database.at(i).vibration.front();
             database.at(i).vibration.pop_front();
         }
@@ -929,27 +805,27 @@ void uwbCallback(const boost::shared_ptr<const timeArr_msgs::FloatArray> msg)
 }
 #endif
 
-
-//Subscribes to lidar stream, feeds into Yolo, then tracks the object
-double averageTime = 0;
-int timeCount = 0;
-
+// Callback Function for Visual Pipeline: Handles inference, object depth estimation, and tracking
 void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, const boost::shared_ptr<const sensor_msgs::Image> depthImg2)
 {
     torch::DeviceType device_type;
-    if (torch::cuda::is_available()) {
+    if (torch::cuda::is_available())
+    {
         device_type = torch::kCUDA;
-    } else {
+    }
+    else
+    {
         device_type = torch::kCPU;
     }
     torch::Device device(device_type);
-    // double startTime = ros::Time::now().toSec();
 
-    if (!gotTransform) {
+    if (!gotTransform)
+    {
         cv::Mat camMatrix(3, 3, CV_32FC1, camParam);
         cv::Mat distortionMatrix(1, 5, CV_32FC1, intrin.coeffs);
         uint8_t colorArr[colorImg2->height * colorImg2->width * 3];
-        for (int i = 0; i < colorImg2->height * colorImg2->width * 3; i++) {
+        for (int i = 0; i < colorImg2->height * colorImg2->width * 3; i++)
+        {
             colorArr[i] = colorImg2->data[i];
         }
         getTransform(camMatrix, distortionMatrix, cv::Mat(colorImg2->height, colorImg2->width, CV_8UC3, colorArr));
@@ -959,13 +835,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     }
 
     KalmanTracker::kf_count = 0; // tracking id relies on this, so we have to reset it in each seq.
-    //Convert to opencv
+    // Convert to opencv
     cv::Mat img(colorImg2->height, colorImg2->width, CV_8UC3, const_cast<uchar *>(&colorImg2->data[0]), colorImg2->step);
     cv::Mat img_input = img.clone();
     cv::Mat img_input2 = img.clone();
     cv::resize(img, img_input, cv::Size(imgW, imgH));
 
-    //Conduct inference
+    // Conduct inference
     imgTensor = torch::from_blob(img_input.data, {img_input.rows, img_input.cols, 3}, torch::kByte);
     imgTensor = imgTensor.permute({2, 0, 1});
     imgTensor = imgTensor.toType(torch::kFloat);
@@ -975,25 +851,27 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     torch::Tensor preds = module.forward({imgTensor.to(device)}).toTuple()->elements()[0].toTensor().to(torch::kCPU);
     std::vector<torch::Tensor> dets = soft_non_max_suppression(preds, 0.2, 0.7);
 
-    // std::cout << "Model Inference Time is: " << ros::Time::now().toSec() - startTime << std::endl;
-    //Return if no objects detected
-    if (dets.size() == 0 || dets[0].sizes()[0] == 0) {
+    // Return if no objects detected
+    if (dets.size() == 0 || dets[0].sizes()[0] == 0)
+    {
         cv::cvtColor(img, img, cv::COLOR_BGR2RGB, 3);
         cv::imshow("Output", img);
         cv::waitKey(1);
         return;
     }
-    //Increment the frame count
+    // Increment the frame count
     frame_count++;
+
     /**
      * TRACKING
      * */
-    //First frame from camera, fill tracker
+
+    // First frame from camera, fill tracker
     if (trackers.size() == 0)
     {
         if (dets.size() > 0)
         {
-            //Get bounding box, add to tracker
+            // Get bounding box, add to tracker
             for (size_t i = 0; i < dets[0].sizes()[0]; ++i)
             {
                 float left = dets[0][i][0].item().toFloat() * img.cols / imgW;
@@ -1003,7 +881,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 float score = dets[0][i][4].item().toFloat();
                 int classID = dets[0][i][5].item().toInt();
                 TrackingBox tb;
-                tb.id = database_id++; //Assign the id based off a simple counter
+                tb.id = database_id++; // Assign the id based off a simple counter
                 tb.frame = frame_count;
                 tb.box = Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom));
                 tb.classifier = classnames.at(classID);
@@ -1012,7 +890,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 trackers.push_back(trk);
             }
         }
-        //Return out of function, no need to track because first frame
+        // Return out of function, no need to track because first frame
         return;
     }
     ///////////////////////////////////////
@@ -1031,7 +909,6 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         else
         {
             it = trackers.erase(it);
-            //cerr << "Box invalid at frame: " << frame_count << endl;
         }
     }
 
@@ -1039,7 +916,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     // 3.2. associate detections to tracked object (both represented as bounding boxes)
     // dets : detFrameData[fi]
     trkNum = predictedBoxes.size();
-    detNum = dets[0].sizes()[0]; //detFrameData[fi].size();
+    detNum = dets[0].sizes()[0]; // detFrameData[fi].size();
 
     iouMatrix.clear();
     iouMatrix.resize(trkNum, vector<double>(detNum, 0));
@@ -1047,20 +924,11 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     {
         for (unsigned int j = 0; j < detNum; j++)
         {
-            // use 1-iou because the hungarian algorithm computes a minimum-cost assignment.
-            //iouMatrix[i][j] = 1 - GetIOU(predictedBoxes[i], detFrameData[fi][j].box);
 
             float left = dets[0][j][0].item().toFloat() * img.cols / imgW;
             float top = dets[0][j][1].item().toFloat() * img.rows / imgH;
             float right = dets[0][j][2].item().toFloat() * img.cols / imgW;
             float bottom = dets[0][j][3].item().toFloat() * img.rows / imgH;
-
-            /*
-            if ((right - left) * (bottom - top) < 10000) {
-                iouMatrix[i][j] = 1;
-                continue;
-            }
-            */
 
             if (predictedBoxesClass[i] == classnames.at(dets[0][j][5].item().toInt()))
             {
@@ -1079,13 +947,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     assignment.clear();
     HungAlgo.Solve(iouMatrix, assignment);
 
-    //Clear all vectors to prepare for new information, easier than updating
+    // Clear all vectors to prepare for new information, easier than updating
     unmatchedTrajectories.clear();
     unmatchedDetections.clear();
     allItems.clear();
     matchedItems.clear();
 
-    //New individual enters scene
+    // New individual enters scene
     if (detNum > trkNum) //	there are unmatched detections
     {
 
@@ -1095,23 +963,22 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         for (unsigned int i = 0; i < trkNum; ++i)
             matchedItems.insert(assignment[i]);
 
-
         set_difference(allItems.begin(), allItems.end(),
-                        matchedItems.begin(), matchedItems.end(),
-                        insert_iterator<set<int>>(unmatchedDetections, unmatchedDetections.begin()));
+                       matchedItems.begin(), matchedItems.end(),
+                       insert_iterator<set<int>>(unmatchedDetections, unmatchedDetections.begin()));
     }
-    //Ppl be gone
     else if (detNum < trkNum) // there are unmatched trajectory/predictions
     {
         for (unsigned int i = 0; i < trkNum; ++i)
-            if (assignment[i] == -1) { // unassigned label will be set as -1 in the assignment algorithm
+            if (assignment[i] == -1)
+            { // unassigned label will be set as -1 in the assignment algorithm
                 unmatchedTrajectories.insert(i);
             }
     }
     else
         ;
 
-    //Find matched pairs, and unmatched bounding boxes based on IOU
+    // Find matched pairs, and unmatched bounding boxes based on IOU
     matchedPairs.clear();
     for (unsigned int i = 0; i < trkNum; ++i)
     {
@@ -1129,7 +996,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     ///////////////////////////////////////
     // 3.3. updating trackers
 
-    //Iterate through the matched trackers and update them with the new information
+    // Iterate through the matched trackers and update them with the new information
     int detIdx, trkIdx;
     for (unsigned int i = 0; i < matchedPairs.size(); i++)
     {
@@ -1141,7 +1008,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float bottom = dets[0][detIdx][3].item().toFloat() * img.rows / imgH;
         float score = dets[0][detIdx][4].item().toFloat();
         int classID = dets[0][detIdx][5].item().toInt();
-        trackers[trkIdx].update(Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom)),  classnames.at(classID), score);
+        trackers[trkIdx].update(Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom)), classnames.at(classID), score);
     }
 
     // create and initialise new trackers for unmatched detections
@@ -1153,14 +1020,8 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         float bottom = dets[0][umd][3].item().toFloat() * img.rows / imgH;
         float score = dets[0][umd][4].item().toFloat();
         int classID = dets[0][umd][5].item().toInt();
-        /*
-        if ((right - left) * (bottom - top) < 8000) {
-            std::cout << "Too small :D" << std::endl;
-            continue;
-        }
-        */
         TrackingBox tb;
-        tb.id = database_id++; //classID;
+        tb.id = database_id++; // classID;
         tb.box = Rect_<float>(Point_<float>(left, top), Point_<float>(right, bottom));
         tb.classifier = classnames.at(classID);
         tb.score = score;
@@ -1168,13 +1029,13 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         trackers.push_back(tracker);
     }
 
-    //Fill frametrackingresult with the tracker array information, removing dead trackers that have not been updated in a while
+    // Fill frametrackingresult with the tracker array information, removing dead trackers that have not been updated in a while
     frameTrackingResult.clear();
     for (auto it = trackers.begin(); it != trackers.end();)
     {
-        //Hit streak must be greater than min_hits
+        // Hit streak must be greater than min_hits
         if (((*it).m_time_since_update < max_age) &&
-				((*it).m_hit_streak >= min_hits || frame_count <= min_hits))
+            ((*it).m_hit_streak >= min_hits || frame_count <= min_hits))
         {
             TrackingBox res;
             res.box = (*it).get_state();
@@ -1185,39 +1046,45 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             frameTrackingResult.push_back(res);
             it++;
         }
-        //Remove dead trackers that haven't been updated in 5 frames
-        else if (it != trackers.end() && (*it).m_time_since_update > max_age) {
+        // Remove dead trackers that haven't been updated in 5 frames
+        else if (it != trackers.end() && (*it).m_time_since_update > max_age)
+        {
             it = trackers.erase(it);
         }
-        else {
+        else
+        {
             it++;
         }
     }
 
-    //Increment the inactive ticks, every update resets ticksInactive to zero
+    // Increment the inactive ticks, every update resets ticksInactive to zero
     dataLock.lock();
-    for (int i = 0; i < database.size(); i++) {
+    for (int i = 0; i < database.size(); i++)
+    {
         database.at(i).ticksInactive++;
     }
     dataLock.unlock();
-    //Loop through the vector generated by the tracker, and compute depth, adding to databse if significant enough
-    for (auto tb : frameTrackingResult) {
+    // Loop through the vector generated by the tracker, and compute depth, adding to database if significant enough
+    for (auto tb : frameTrackingResult)
+    {
         double centroid[3] = {0, 0, 0};
-        getCentroidTransformed(colorImg2, depthImg2, tb.box, centroid); //RETURNS CENTROID IN APRILTAG COORDS
-        if (centroid[0] == -1 || centroid[1] == -1 || centroid[2] == -1) {
+        getCentroidTransformed(colorImg2, depthImg2, tb.box, centroid); // RETURNS CENTROID IN APRILTAG COORDS
+        if (centroid[0] == -1 || centroid[1] == -1 || centroid[2] == -1)
+        {
             continue;
         }
         bool objectFound = false;
-        //Update elements and delete old ones
+        // Update elements and delete old ones
         dataLock.lock();
-        for (int i = 0; i < database.size(); i++) {
-            //If same object, update it
-            if (tb.id == database.at(i).ID) {
+        for (int i = 0; i < database.size(); i++)
+        {
+            // If same object, update it
+            if (tb.id == database.at(i).ID)
+            {
                 database.at(i).timestamp = ros::Time::now().toSec();
                 database.at(i).x = centroid[0];
                 database.at(i).y = centroid[1];
                 database.at(i).z = centroid[2];
-                //Add depth potentially
                 database.at(i).box = tb.box;
                 database.at(i).ticksInactive = 0;
                 database.at(i).score = tb.score;
@@ -1225,7 +1092,8 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                 break;
             }
         }
-        if (!objectFound) {
+        if (!objectFound)
+        {
             database.push_back(obj(tb.id, ros::Time::now().toSec(), tb.box, tb.classifier, centroid[0], centroid[1], centroid[2], 0, 0, tb.score));
         }
         dataLock.unlock();
@@ -1233,13 +1101,16 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
 
     dataLock.lock();
 
-    //Update depth of objects that are still in database but not identified
-    for (int i = 0; i < database.size(); i++) {
+    // Update depth of objects that are still in database but not identified
+    for (int i = 0; i < database.size(); i++)
+    {
         double centroid[3] = {0, 0, 0};
         obj temp = database.at(i);
-        if (temp.ticksInactive > 1) {
+        if (temp.ticksInactive > 1)
+        {
             getCentroidTransformed(colorImg2, depthImg2, temp.box, centroid);
-            if (centroid[0] == -1 || centroid[1] == -1 || centroid[2] == -1) {
+            if (centroid[0] == -1 || centroid[1] == -1 || centroid[2] == -1)
+            {
                 continue;
             }
             database.at(i).x = centroid[0];
@@ -1249,18 +1120,22 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
     }
     dataLock.unlock();
 
-    if (COMPLEX_EVENT) {
+    if (COMPLEX_EVENT)
+    {
         bool washing_machine_detected = 0;
         double washing_machine_coords[3] = {0, 0, 0};
-        for (int i = 0; i < database.size(); i++) {
+        for (int i = 0; i < database.size(); i++)
+        {
             obj temp = database.at(i);
-            if (temp.type == "washing machine") {
+            if (temp.type == "washing machine")
+            {
                 washing_machine_detected = 1;
                 washing_machine_coords[0] = temp.x;
                 washing_machine_coords[1] = 0;
                 washing_machine_coords[2] = temp.z;
             }
-            if (washing_machine_detected) break;
+            if (washing_machine_detected)
+                break;
         }
         if (!washing_machine_detected)
         {
@@ -1270,15 +1145,16 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         {
             for (int i = 0; i < database.size(); i++)
             {
-                obj temp = database.at(i); 
+                obj temp = database.at(i);
                 double person_coords[3] = {0, 0, 0};
-                if (temp.type == "person") {
+                if (temp.type == "person")
+                {
                     washing_machine_detected = 1;
                     person_coords[0] = temp.x;
                     person_coords[1] = 0;
                     person_coords[2] = temp.z;
                     double distance = computeDistance(person_coords, washing_machine_coords);
-                    if (distance <= 0.5) 
+                    if (distance <= 0.5)
                     {
                         interaction_detected = 1;
                     }
@@ -1290,12 +1166,14 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
 
     cv::cvtColor(img, img, cv::COLOR_BGR2RGB, 3);
 
-    //Iterate through database and extract information
+    // Iterate through database and extract information
     dataLock.lock();
-    for (int i = 0; i < database.size(); i++) {
+    for (int i = 0; i < database.size(); i++)
+    {
         obj elem = database.at(i);
-        //Do not display objects that have been inactive for a while
-        if (elem.ticksInactive > 5) {
+        // Do not display objects that have been inactive for a while
+        if (elem.ticksInactive > 5)
+        {
             continue;
         }
         Rect_<float> box = elem.box;
@@ -1306,120 +1184,127 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
         string uwb_status = (uwb1Used) ? "UWB 1 is used" : "UWB 2 is used";
         std::stringstream ss;
         ss << ((int)(distance * 1000)) / 1000.0 << "m";
-        cv::putText(img, //target image
-            ss.str(), //text
-            cv::Point(box.x + 5,  box.y + 20), //top-left position
-            cv::FONT_HERSHEY_DUPLEX,
-            0.8,
-            CV_RGB(255, 0, 0), //font color
-            2);
-        cv::putText(img, //target image
-            elem.type, //text
-            (elem.type.length() > 13) ? cv::Point(box.x - 60,  box.y + 70)
-            : cv::Point(box.x + 5, box.y + 70), //top-left position
-            cv::FONT_HERSHEY_DUPLEX,
-            0.8,
-            CV_RGB(255, 0, 0), //font color
-            2);
-        cv::putText(img, //target image
-            state, //text
-            cv::Point(box.x + 5 ,  box.y + 120), //top-left position
-            cv::FONT_HERSHEY_DUPLEX,
-            0.8,
-            CV_RGB(255, 0, 0),
-            2);
-        if(COMPLEX_EVENT) {
-            cv::putText(img, 
-                uwb_status,
-                cv::Point(10, 50),
-                cv::FONT_HERSHEY_DUPLEX,
-                0.8,
-                CV_RGB(255, 0, 0),
-                2);
+        cv::putText(img,
+                    ss.str(),
+                    cv::Point(box.x + 5, box.y + 20),
+                    cv::FONT_HERSHEY_DUPLEX,
+                    0.8,
+                    CV_RGB(255, 0, 0),
+                    2);
+        cv::putText(img,
+                    elem.type,
+                    (elem.type.length() > 13) ? cv::Point(box.x - 60, box.y + 70)
+                                              : cv::Point(box.x + 5, box.y + 70),
+                    cv::FONT_HERSHEY_DUPLEX,
+                    0.8,
+                    CV_RGB(255, 0, 0),
+                    2);
+        cv::putText(img,
+                    state,
+                    cv::Point(box.x + 5, box.y + 120),
+                    cv::FONT_HERSHEY_DUPLEX,
+                    0.8,
+                    CV_RGB(255, 0, 0),
+                    2);
+        if (MULTI_VIEW_UWB)
+        {
+            cv::putText(img,
+                        uwb_status,
+                        cv::Point(10, 50),
+                        cv::FONT_HERSHEY_DUPLEX,
+                        0.8,
+                        CV_RGB(255, 0, 0),
+                        2);
         }
     }
 
     dataLock.unlock();
 
-    if (COMPLEX_EVENT) {
-        switch(curr_stage) {
-            case 0:
-                curr_stage_text = "Idle";
-                if (washine_machine_state==1) curr_stage += 1;
-                interaction_detected = 0;
-                break;
-            case 1:
-                curr_stage_text = "Washing";
-                if (washine_machine_state==0) curr_stage += 1;
-                interaction_detected = 0;
-                break;
-            case 2:
-                curr_stage_text = "Wash Done (Alarm)";
-                if (interaction_detected) curr_stage += 1;
-                interaction_detected = 0;
-                break;
-            case 3:
-                curr_stage_text = "Wash Done";
-                if (washine_machine_state==2)  curr_stage += 1;
-                interaction_detected = 0;
-                break;
-            case 4:
-                curr_stage_text = "Drying";
-                if (washine_machine_state==0) curr_stage += 1;
-                interaction_detected = 0;
-                break;
-            case 5:
-                curr_stage_text = "Drying Done";
-                if (interaction_detected) curr_stage = 0;
-                interaction_detected = 0;
-                break;
+    if (COMPLEX_EVENT)
+    {
+        switch (curr_stage)
+        {
+        case 0:
+            curr_stage_text = "Idle";
+            if (washine_machine_state == 1)
+                curr_stage += 1;
+            interaction_detected = 0;
+            break;
+        case 1:
+            curr_stage_text = "Washing";
+            if (washine_machine_state == 0)
+                curr_stage += 1;
+            interaction_detected = 0;
+            break;
+        case 2:
+            curr_stage_text = "Wash Done (Alarm)";
+            if (interaction_detected)
+                curr_stage += 1;
+            interaction_detected = 0;
+            break;
+        case 3:
+            curr_stage_text = "Wash Done";
+            if (washine_machine_state == 2)
+                curr_stage += 1;
+            interaction_detected = 0;
+            break;
+        case 4:
+            curr_stage_text = "Drying";
+            if (washine_machine_state == 0)
+                curr_stage += 1;
+            interaction_detected = 0;
+            break;
+        case 5:
+            curr_stage_text = "Drying Done";
+            if (interaction_detected)
+                curr_stage = 0;
+            interaction_detected = 0;
+            break;
         }
-        /*
-        cv::putText(img, //target image
-            "Current Stage is:" + curr_stage_text, //text
-            cv::Point(0,  30), //top-left position
-            cv::FONT_HERSHEY_DUPLEX,
-            1.0,
-            CV_RGB(255, 0, 0),
-            2);
-            */
+        if (COMPLEX_EVENT)
+        {
+            cv::putText(img,                                   // target image
+                        "Current Stage is:" + curr_stage_text, // text
+                        cv::Point(0, 30),                      // top-left position
+                        cv::FONT_HERSHEY_DUPLEX,
+                        1.0,
+                        CV_RGB(255, 0, 0),
+                        2);
+        }
     }
-    //Display
+    // Display
     cv::imshow("Output", img);
     cv::waitKey(1);
-    if (++timeCount >= 100) {
-        timeCount = 1;
-        averageTime = 0;
-    }
-    //averageTime += ros::Time::now().toSec() - startTime;
-    //std::cout << "Leaving with elapsed " << averageTime / timeCount << std::endl;
-
 }
 
 /**
  *  SVM and VMD Functions
  */
 
-//Performs SVM on a single object
-void calling_svm(obj& elem)
+// Performs SVM on a single object
+void calling_svm(obj &elem)
 {
 
-    double slice[3 * chunkSize2 - 2] = {0.0}; //If this isnt zero filled does it cause any issues?
-    if (elem.vibration.empty()) {
+    double slice[3 * chunkSize2 - 2] = {0.0};
+    if (elem.vibration.empty())
+    {
         return;
     }
     double *tempArr = elem.vibration.back();
-    for (int i = 0; i < chunkSize2; i++) {
-        slice[i] = tempArr[chunkSize2-1-i];
+    for (int i = 0; i < chunkSize2; i++)
+    {
+        slice[i] = tempArr[chunkSize2 - 1 - i];
     }
-    for (int i = 0; i < chunkSize2; i++) {
-        slice[i+chunkSize2-1] = tempArr[i];
+    for (int i = 0; i < chunkSize2; i++)
+    {
+        slice[i + chunkSize2 - 1] = tempArr[i];
     }
-    for (int i = 0; i < chunkSize2; i++) {
-        slice[i+chunkSize2-2] = tempArr[chunkSize2-1-i];
+    for (int i = 0; i < chunkSize2; i++)
+    {
+        slice[i + chunkSize2 - 2] = tempArr[chunkSize2 - 1 - i];
     }
 
-    //low pass filtering cut_low=20, cut_high=70
+    // low pass filtering cut_low=20, cut_high=70
     Eigen::VectorXd zi(b_size);
     double largeZVector[3 * chunkSize2 - 2];
     double newZVector[chunkSize2];
@@ -1433,267 +1318,235 @@ void calling_svm(obj& elem)
         }
     }
 
-    for(int i = 0; i < chunkSize2; i++) {
-        newZVector[i] = largeZVector[i + chunkSize2-1];
-        /* Debug: print the filtered signal
-        if (elem.type == "washing machine") {
-            if (i < chunkSize2 - 1) {
-                printf("%.16f ,", newZVector[i]);
-            }
-            else if (i == chunkSize2 - 1){
-                 printf("%.16f]\n", newZVector[i]);
-            }
-        }
-        */
+    for (int i = 0; i < chunkSize2; i++)
+    {
+        newZVector[i] = largeZVector[i + chunkSize2 - 1];
     }
-    // printf("\n\n\n");
-
-    // Removed: Normalize the filtered signal to [0,1]
-    // double min_val = *std::min_element(newZVector, newZVector + chunkSize2);
-    // double max_val = *std::max_element(newZVector, newZVector + chunkSize2);
     Eigen::VectorXcd sig_amp(chunkSize2);
-    // for (int i=0;i<chunkSize2;i++)
-    // {
-    //     sig_amp[i] = (newZVector[i]- min_val) / (max_val - min_val + 1e-32);
-    // }
-    for (int i=0;i<chunkSize2;i++)
+    for (int i = 0; i < chunkSize2; i++)
     {
         sig_amp[i] = newZVector[i];
     }
 
-    //Perform FFT
+    // Perform FFT
     Eigen::FFT<double> fft;
     Eigen::VectorXcd Y(chunkSize2);
     fft.fwd(Y, sig_amp);
 
     int half_length = chunkSize2 / 2;
     double P1[half_length];
-    for(int i=0;i<half_length;i++)
+    for (int i = 0; i < half_length; i++)
     {
-        P1[i] = std::abs(Y[i+1]);
+        P1[i] = std::abs(Y[i + 1]);
     }
 
     int feature_size = 32;
     double features[feature_size] = {0.0};
-    int intevals = half_length/feature_size;
-    for(int i=0; i<32; i++)
+    int intevals = half_length / feature_size;
+    for (int i = 0; i < 32; i++)
     {
         double temp_max = 0.0;
-        for(int j=0; j<intevals;j++)
+        for (int j = 0; j < intevals; j++)
         {
-            if (P1[i*intevals+j] > temp_max)
+            if (P1[i * intevals + j] > temp_max)
             {
-                temp_max = P1[i*intevals+j];
+                temp_max = P1[i * intevals + j];
             }
         }
         features[i] += temp_max;
     }
     // Removed: Normalize the extracted frequency features
-    double min_val = *std::min_element(features, features+feature_size);
-    double max_val = *std::max_element(features, features+feature_size);
-    for (int i=0;i<feature_size;i++)
+    double min_val = *std::min_element(features, features + feature_size);
+    double max_val = *std::max_element(features, features + feature_size);
+    for (int i = 0; i < feature_size; i++)
     {
-       features[i] = (features[i]- min_val) / (max_val - min_val + 1e-32);
+        features[i] = (features[i] - min_val) / (max_val - min_val + 1e-32);
     }
-
-    /* Debug: Printing the extracted features
-    if (elem.type == "washing machine") {
-        printf("[");
-        for(int i = 0; i < 32; i++) {
-                if (i < 32-1) {
-                    printf("%.16f ,", features[i]);
-                }
-                else if (i == 32-1){
-                        printf("%.16f]\n\n\n", features[i]);
-                }
-            }
-    }
-    */
 
     int state = -1;
     string classifier = elem.type;
-    if (classifier == "standing fan") {
+    if (classifier == "standing fan")
+    {
         state = FanClassifier::fan_predict(features);
     }
-    else if (classifier == "vacuum") {
+    else if (classifier == "vacuum")
+    {
         state = VacuumClassifier::vacuum_predict(features);
     }
-    else if (classifier == "washing machine") {
+    else if (classifier == "washing machine")
+    {
         state = WashingClassifier::washing_predict(features);
-        //cout << state<<endl<<endl<<endl;
+        // cout << state<<endl<<endl<<endl;
     }
-    else if (classifier == "drill") {
+    else if (classifier == "drill")
+    {
         state = DrillClassifier::drill_predict(features);
     }
-    else {
+    else
+    {
         std::cout << classifier << std::endl;
         std::cout << "SOMETHING IS TERRIBLY WRONG" << std::endl;
     }
 
     dataLock.lock();
-    //elem.state = state; //if no buffer is used
 
     // dataLock.unlock();
-    if (elem.state_history.size() >= 1) { // 500ms * 30 = 15s
+    if (elem.state_history.size() >= 1)
+    { // 500ms * 30 = 15s
         elem.state_history.pop_front();
     }
     elem.state_history.push_back(state);
     int max_state_defined = 4;
     float temp_state = 0.0;
     int state_cnt[max_state_defined] = {0}; // max # of states of any object
-    for (int i=0; i<elem.state_history.size(); i++)
+    for (int i = 0; i < elem.state_history.size(); i++)
     {
         state_cnt[elem.state_history.at(i)] += 1;
     }
-    /*// Debug: Buffer health
-    for (int i=0; i<max_state_defined; i++)
+
+    elem.state = std::distance(state_cnt, std::max_element(state_cnt, state_cnt + max_state_defined));
+    if (classifier == "washing machine")
     {
-       cout << state_cnt[i] << " | ";
-    }
-    cout << endl;
-    */
-    elem.state = std::distance(state_cnt, std::max_element(state_cnt, state_cnt+max_state_defined));
-    if (classifier == "washing machine") {
         washine_machine_state = elem.state;
     }
 
     double coords[3] = {elem.x, elem.y, elem.z};
     double objDistance = computeDistance(coords, uwb1Absolute);
     dataLock.unlock();
-
-    //std::cout << elem.type << "'s state is " << elem.state << std::endl;
 }
 
-//Performs VMD on a single object
-int calling_vmd(obj& elem)
+// Performs VMD on a single object
+int calling_vmd(obj &elem)
 {
     double startTime = ros::Time::now().toSec();
     int Fs = 1000;
     std::vector<double> unfiltered_data = elem.flattenArr();
-    if (unfiltered_data.size() <= 20 * chunkSize) {
+    if (unfiltered_data.size() <= 20 * chunkSize)
+    {
         return 0;
     }
     int sig_length = unfiltered_data.size();
     const double alpha = 50.0, tau = 0, tol = 1e-7, eps = 2.2204e-16;
-	const int K = 4, DC = 0, init = 1;
-	MatrixXd u, omega;
-	MatrixXcd u_hat;
+    const int K = 4, DC = 0, init = 1;
+    MatrixXd u, omega;
+    MatrixXcd u_hat;
 
-	runVMD(u, u_hat, omega, unfiltered_data, alpha, tau, K, DC, init, tol, eps);
+    runVMD(u, u_hat, omega, unfiltered_data, alpha, tau, K, DC, init, tol, eps);
 
     Eigen::VectorXd new_sig = u.row(0);
-	Eigen::VectorXd new_sig1 = new_sig.array() - new_sig.mean();
+    Eigen::VectorXd new_sig1 = new_sig.array() - new_sig.mean();
 
-	//fft
-	Eigen::FFT<double> fft;
+    // fft
+    Eigen::FFT<double> fft;
     Eigen::VectorXcd Y(sig_length);
     fft.fwd(Y, new_sig1);
 
-    int half_length = sig_length/2;
-    int ignored_freq_bins =  int(0.13/1000 * sig_length) + 1;
+    int half_length = sig_length / 2;
+    int ignored_freq_bins = int(0.13 / 1000 * sig_length) + 1;
 
     double P1[half_length - ignored_freq_bins];
     double max_val = -1;
     int max_idx = -1;
-    for(int j=ignored_freq_bins;j<half_length;j++)
+    for (int j = ignored_freq_bins; j < half_length; j++)
     {
-        P1[j-ignored_freq_bins] = std::abs(Y[j]);
-        if (P1[j-ignored_freq_bins] > max_val)
+        P1[j - ignored_freq_bins] = std::abs(Y[j]);
+        if (P1[j - ignored_freq_bins] > max_val)
         {
-            max_val = P1[j-ignored_freq_bins];
+            max_val = P1[j - ignored_freq_bins];
             max_idx = j;
         }
     }
 
     float bpm = 60 * float(max_idx) / float(sig_length) * Fs;
     dataLock.lock();
-    elem.state = (int) bpm;
+    elem.state = (int)bpm;
     dataLock.unlock();
     std::cout << ros::Time::now().toSec() - startTime << std::endl;
     return 0;
 }
 
-//Iterates through database, calling SVM on nonperson objects
+// Iterates through database, calling SVM on nonperson objects
 int state_classifiers()
 {
     std::vector<std::thread> ThreadVector;
-    while(1)
+    while (1)
     {
-        //TODO conduct timing analysis here to measure one pass of SVM on a frame
+        // TODO conduct timing analysis here to measure one pass of SVM on a frame
         dataLock.lock();
-        for (int i = 0; i < database.size(); i++) {
+        for (int i = 0; i < database.size(); i++)
+        {
             int temp = i;
-            obj& elem = database.at(i);
+            obj &elem = database.at(i);
             if (elem.type != "person")
             {
-                if (elem.ticksInactive > deletionTicks) {
+                if (elem.ticksInactive > deletionTicks)
+                {
                     std::cout << "Element is being deleted" << std::endl;
-                    while (!database.at(i).vibration.empty()) {
+                    while (!database.at(i).vibration.empty())
+                    {
                         delete database.at(i).vibration.front();
                         database.at(i).vibration.pop_front();
                     }
                     database.erase(database.begin() + i);
                     i--;
                 }
-                else {
-                    //std::function<void()> t1 = []() {calling_svm(elem, temp);};
-                    //ThreadVector.emplace_back(t1);
-                    ThreadVector.emplace_back([&](){calling_svm(elem);});
+                else
+                {
+                    ThreadVector.emplace_back([&]()
+                                              { calling_svm(elem); });
                 }
             }
-
         }
         dataLock.unlock();
 
-        ThreadVector.emplace_back([&](){usleep(1000000);}); //TODO Check this w Ziqi
+        ThreadVector.emplace_back([&]()
+                                  { usleep(1000000); });
         if (ThreadVector.size())
         {
-            for(auto& t: ThreadVector)
+            for (auto &t : ThreadVector)
             {
                 t.join();
             }
         }
         ThreadVector.clear();
-        // std::cout << std::endl;
-        /*
-        while (ThreadVector.size())
-        {
-            std::cout << "Erasing" << std::endl;
-            ThreadVector.erase(ThreadVector.begin());
-        }
-        */
     }
     return 0;
 }
 
-//Iterates through database, calling VMS on person objects
+// Iterates through database, calling VMS on person objects
 int respiration_est()
 {
     std::vector<std::thread> ThreadVector;
-    while(1)
+    while (1)
     {
         dataLock.lock();
-        for (int i = 0; i < database.size(); i++) {
-            obj& elem = database.at(i);
+        for (int i = 0; i < database.size(); i++)
+        {
+            obj &elem = database.at(i);
             if (elem.type == "person")
             {
-                if (elem.ticksInactive > deletionTicks) {
-                    while (!database.at(i).vibration.empty()) {
+                if (elem.ticksInactive > deletionTicks)
+                {
+                    while (!database.at(i).vibration.empty())
+                    {
                         delete database.at(i).vibration.front();
                         database.at(i).vibration.pop_front();
                     }
                     database.erase(database.begin() + i);
                 }
-                else {
-                    ThreadVector.emplace_back([&](){calling_vmd(elem);});
+                else
+                {
+                    ThreadVector.emplace_back([&]()
+                                              { calling_vmd(elem); });
                 }
             }
         }
         dataLock.unlock();
-        ThreadVector.emplace_back([&](){usleep(1000000);}); //guardian thread, 1s(1Hz)
+        ThreadVector.emplace_back([&]()
+                                  { usleep(1000000); }); // guardian thread, 1s(1Hz)
         if (ThreadVector.size())
         {
-            for(auto& t: ThreadVector)
+            for (auto &t : ThreadVector)
             {
                 t.join();
             }
@@ -1702,7 +1555,6 @@ int respiration_est()
         {
             ThreadVector.erase(ThreadVector.begin());
         }
-
     }
     return 0;
 }
@@ -1717,12 +1569,16 @@ int start_ros_spin()
  *  MAIN
  */
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[])
+{
     torch::DeviceType device_type;
-    if (torch::cuda::is_available()) {
+    if (torch::cuda::is_available())
+    {
         device_type = torch::kCUDA;
         module = torch::jit::load("/home/ziqi/Desktop/Capricorn_debug_ws/src/object_tracker/Weights/640_Medium.torchscript.pt", device_type);
-    } else {
+    }
+    else
+    {
         device_type = torch::kCPU;
         module = torch::jit::load("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/Weights/FullSet.torchscript.pt", device_type);
     }
@@ -1733,15 +1589,15 @@ int main(int argc, char* argv[]) {
     typedef sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> MySyncPolicyLidar;
     Synchronizer<MySyncPolicyLidar> syncLidar(MySyncPolicyLidar(10), color_sub, depth_sub);
     syncLidar.registerCallback(boost::bind(&trackObjects, _1, _2));
-    #if MULTI_VIEW_UWB
-        message_filters::Subscriber<timeArr_msgs::FloatArray> uwb1_sub(nh, "/uwb_chunk", 5);
-        typedef sync_policies::ApproximateTime<timeArr_msgs::FloatArray, timeArr_msgs::FloatArray> MySyncPolicyUWB;
-        message_filters::Subscriber<timeArr_msgs::FloatArray> uwb2_sub(nh, "/uwb_chunk2", 5);
-        Synchronizer<MySyncPolicyUWB> syncUWB(MySyncPolicyUWB(10), uwb1_sub, uwb2_sub);
-        syncUWB.registerCallback(boost::bind(&uwbCallback, _1, _2));
-    #else
-        ros::Subscriber uwb_sub = nh.subscribe("uwb_chunk", 5, uwbCallback);
-    #endif
+#if MULTI_VIEW_UWB
+    message_filters::Subscriber<timeArr_msgs::FloatArray> uwb1_sub(nh, "/uwb_chunk", 5);
+    typedef sync_policies::ApproximateTime<timeArr_msgs::FloatArray, timeArr_msgs::FloatArray> MySyncPolicyUWB;
+    message_filters::Subscriber<timeArr_msgs::FloatArray> uwb2_sub(nh, "/uwb_chunk2", 5);
+    Synchronizer<MySyncPolicyUWB> syncUWB(MySyncPolicyUWB(10), uwb1_sub, uwb2_sub);
+    syncUWB.registerCallback(boost::bind(&uwbCallback, _1, _2));
+#else
+    ros::Subscriber uwb_sub = nh.subscribe("uwb_chunk", 5, uwbCallback);
+#endif
 
     std::ifstream f("/home/nesl/Desktop/final_capricorn_ws/src/object_tracker/objects.names");
     std::string name = "";
