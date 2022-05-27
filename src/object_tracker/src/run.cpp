@@ -87,7 +87,7 @@ struct Bin
  */
 #define b_size 85        // b_size used for filtering cutoff
 #define MULTI_VIEW_UWB 1 // MULTI_VIEW for two UWB sensors
-#define COMPLEX_EVENT 1  // COMPLEX_EVENT for human + washing machine interaction
+#define COMPLEX_EVENT 0  // COMPLEX_EVENT for human + washing machine interaction
 // UWB chunk size
 const int chunkSize = 1024;
 const int chunkSize2 = 1024;
@@ -1391,7 +1391,7 @@ void calling_svm(obj &elem)
     dataLock.lock();
 
     // dataLock.unlock();
-    if (elem.state_history.size() >= 1)
+    if (elem.state_history.size() >= 15)
     { // 500ms * 30 = 15s
         elem.state_history.pop_front();
     }
