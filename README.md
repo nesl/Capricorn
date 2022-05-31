@@ -19,5 +19,7 @@ Install libtorch, following the instructions from the link: [Libtorch](https://p
 Note that installation of a GPU based version of libtorch will require some configuration of existing CUDA environments
 
 ### OpenCV Installation:
-This project leverages the Aruco AprilTag library from OpenCV, which may not be available in older versions of OpenCV
+This project leverages the Aruco AprilTag library from OpenCV, specifically the 36h11 tag family. This was introduced in the 3.4.2 version. Older versions of OpenCV will not be compatible with the current code. As a precaution, install the latest version of OpenCV from the following link: [OpenCV](https://docs.opencv.org/4.x/d7/d9f/tutorial_linux_install.html). **Be sure to also include the OpenCV Contrib Libraries**
+
+## Editing the Code to Run on your Machine
 
