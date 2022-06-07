@@ -569,7 +569,11 @@ std::string getState(std::string classifier, int state)
     }
     else if (classifier == "person")
     {
-        if (state == 0)
+        if (COMPLEX_EVENT)
+        {
+            return "";
+        }
+        else if (state == 0)
         {
             return "bpm estimating";
         }
@@ -1193,7 +1197,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
                     2);
         cv::putText(img,
                     elem.type,
-                    (elem.type.length() > 13) ? cv::Point(box.x - 60, box.y + 70)
+                    (elem.type.length() > 7) ? cv::Point(box.x - 10, box.y + 70)
                                               : cv::Point(box.x + 5, box.y + 70),
                     cv::FONT_HERSHEY_DUPLEX,
                     0.8,
@@ -1237,7 +1241,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             interaction_detected = 0;
             break;
         case 2:
-            curr_stage_text = "Wash Done (Alarm)";
+            curr_stage_text = "Wash Done (Alarm=1)";
             if (interaction_detected)
                 curr_stage += 1;
             interaction_detected = 0;
@@ -1255,7 +1259,7 @@ void trackObjects(const boost::shared_ptr<const sensor_msgs::Image> colorImg2, c
             interaction_detected = 0;
             break;
         case 5:
-            curr_stage_text = "Drying Done";
+            curr_stage_text = "Dry Done (Alarm=1)";
             if (interaction_detected)
                 curr_stage = 0;
             interaction_detected = 0;
