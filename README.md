@@ -102,5 +102,15 @@ rosrun x4m05 sender
 
 Successful execution will result in "Chunk Sent" being printed. 
 
+The system should now be running in full capacity. If there is uncertainty about whether the vibration data is being sent over, open up a terminal on the host machine and run 
+
+```
+export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XX
+rostopic list
+```
+Check to see if /uwb_chunk is among the listed topic
+
+Then, run ```rostopic echo /uwb_chunk```. If data is being properly streamed, then this should print out a huge chunk of numbers every second.
+
 
 
