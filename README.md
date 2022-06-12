@@ -30,16 +30,21 @@ As a precaution, install the latest version of OpenCV from the following link: [
 ### Eigen Installation:
 Install the Eigen library by following the instruction in this link: [Eigen Installation](https://eigen.tuxfamily.org/dox/GettingStarted.html)
 
-## Modifying Source Code to Run on your Machine
+## Preparing Source Code to Run on your Machine
+On the **host computer** and extract the entire **src** folder to a directory of your choice. On the **Raspberry Pi** download and unzip the entire **uwb_workspace** folder.
 
-On the **Raspbery Pi**, download and extract the entire **uwb_workspace** to a desired directory
+### Source Code Modification
 
-### Host Machine
-On the host computer download and extract the entire **src** folder to a directory of your choice.
-
-**Lidar Streamer:**
+**Host computer Lidar Streamer:**
 Within the src folder, locate the **lidar_streamer** folder, and navigate to the **CMakeLists.txt** file. In **line 10**, change the directory of **realsense2_DIR** to the location the realsense2 cmake file is stored in. 
 
-**Object Tracker** 
+**Host Computer Object Tracker:** 
 Navigate to the **object_tracker** folder, and open the **CMakeLists.txt** file. On **line 7**, change the **realsense2_DIR** to the location of the realsense2 cmake file. On **line 30**, change the **CMAKE_PREFIX_PATH** to the location of the libtorch cmake file installed during the libtorch download. 
 
+Locate the **run.cpp** file inside the **object_tracker/src** directory. On **line 1582** modify the absolute file path to point to **Weights/FullSetGPU.torchscript.pt** within object_tracker. On **line 1587** modify the absolute file path to point to **Weights/FullSet.torchscript.pt** within object_tracker. On **line 1606** modify the absolute file path to point to the **object_tracker/objects.names** file.
+
+
+### Making the files
+on **both** the Pi and host computer, run ```catkin_make```
+
+## Running 
