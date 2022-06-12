@@ -2,8 +2,7 @@
 Capricorn is a cross-modal sensor fusion system combining RF sensor data with visual pixels to classify both intrinsic and extrinsic states of subject. The extrinsic sensing pipeline provides the object class information and location within a 3D space while the intrinsic sensing pipeline leverages a UWB sensor to infer "hidden" states of the subject. The seamless integration of these two pipelines allows for determination of not only the type and location of a given object, but also of it's current behavior. 
 
 ## System Dependency Installation
-Capricorn is a cross-device system, requiring at minimum one host computer connected to a lidar camera sensor, and a Raspberry Pi reading data from the UWB sensor, all connected to the same network to enable ROS communication. The following System Dependency Installations apply mainly to the host computer. ROS installation is the **only** one that applies to the Pi as well. 
-
+Capricorn is a cross-device system, requiring at minimum one host computer connected to a lidar camera sensor, and a Raspberry Pi reading data from the UWB sensor, all connected to the same network to enable ROS communication. The following System Dependency Installations apply mainly to the host computer. ROS installation is the **only** one that applies to the Pi as well. We have also provided some rosbag files with prerecorded UWB sensor data as well as Lidar + Camera data, which would only require a single host computer to run. If you are simply using the prerecorded files, skip to the section at the end titled "Prerecorded Data Setup".
 
 ### Ros Installation (HOST AND PI):
 Install ROS Melodic from the following link: [ROS Installation](http://wiki.ros.org/noetic/Installation)
@@ -45,6 +44,12 @@ Locate the **run.cpp** file inside the **object_tracker/src** directory. On **li
 
 
 ### Making the files
-on **both** the Pi and host computer, run ```catkin_make```
+on the host computer, run ```catkin_make``` on the parent directory containing the src folder.
+
+On the Raspberry Pi, run ```catkin_make``` on the uwb_workspace directory.
+
+Common build errors involve a cmake file for realsense2 or libtorch not being found. Verify that the paths are actually pointing to those files. 
 
 ## Running 
+
+
