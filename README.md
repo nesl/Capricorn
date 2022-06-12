@@ -30,17 +30,17 @@ As a precaution, install the latest version of OpenCV from the following link: [
 Install the Eigen library by following the instruction in this link: [Eigen Installation](https://eigen.tuxfamily.org/dox/GettingStarted.html)
 
 ## Preparing Source Code to Run on your Machine
-On the **host computer** and extract the entire **src** folder to a directory of your choice. On the **Raspberry Pi** download and unzip the entire **uwb_workspace** folder.
+On the host computer and extract the entire src folder to a directory of your choice. On the Raspberry Pi download and unzip the entire uwb_workspace folder.
 
 ### Source Code Modification
 
 **Host computer Lidar Streamer:**
-Within the src folder, locate the **lidar_streamer** folder, and navigate to the **CMakeLists.txt** file. In **line 10**, change the directory of **realsense2_DIR** to the location the realsense2 cmake file is stored in. 
+Within the src folder, locate the lidar_streamer folder, and navigate to the CMakeLists.txt file. In line 10, change the directory of realsense2_DIR to the location the realsense2 cmake file is stored in. 
 
 **Host Computer Object Tracker:** 
-Navigate to the **object_tracker** folder, and open the **CMakeLists.txt** file. On **line 7**, change the **realsense2_DIR** to the location of the realsense2 cmake file. On **line 30**, change the **CMAKE_PREFIX_PATH** to the location of the libtorch cmake file installed during the libtorch download. 
+Navigate to the object_tracker folder, and open the CMakeLists.txt file. On line 7, change the realsense2_DIR to the location of the realsense2 cmake file. On line 30, change the CMAKE_PREFIX_PATH to the location of the libtorch cmake file installed during the libtorch download. 
 
-Locate the **run.cpp** file inside the **object_tracker/src** directory. On **line 1582** modify the absolute file path to point to **Weights/FullSetGPU.torchscript.pt** within object_tracker. On **line 1587** modify the absolute file path to point to **Weights/FullSet.torchscript.pt** within object_tracker. On **line 1606** modify the absolute file path to point to the **object_tracker/objects.names** file.
+Locate the run.cpp file inside the object_tracker/src directory. On line 1582 modify the absolute file path to point to **Weights/FullSetGPU.torchscript.pt** within object_tracker. On line 1587 modify the absolute file path to point to **Weights/FullSet.torchscript.pt** within object_tracker. On line 1606 modify the absolute file path to point to the **object_tracker/objects.names** file.
 
 
 ### Making the files
@@ -50,6 +50,57 @@ On the Raspberry Pi, run ```catkin_make``` on the uwb_workspace directory.
 
 Common build errors involve a cmake file for realsense2 or libtorch not being found. Verify that the paths are actually pointing to those files. 
 
-## Running 
+## Running the System Live
+Connect both devices to the same network switch, a higher speed switch will enable faster streaming of the UWB data from the Pi to the host machine
+
+## Host Computer
+Open up **two** terminals and run: 
+
+```
+export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XX
+```
+where XXX.XXX.XXX.XXX represents the IP address of the **host computer** on each terminal.
+
+On both terminals, navigate to the directory containing the src folder, and run 
+
+```
+source devel/setup.bash
+```
+
+On one terminal, then run
+
+```
+rosrun lidar_streamer lidar_streamer
+```
+If this executes correctly, you will see a constant stream of 0.0025 being printed out. If you receive errors, check if the camera is plugged in, and run ```realsense_viewer```, Intel's provided software to toggle on and off the camera in order to verify that they work. 
+
+On the other terminal, run 
+
+```
+rosrun object_tracker testYolo
+```
+If this executes correctly, the model will be loaded, and any AprilTag present within the scene will be read. After a brief delay (few seconds), a window will pop up showing the camera feed with bounding boxes. There will be no vibration information present as the intrinsic pipeline is awaiting the Pi to start sending data. 
+
+### Raspberry Pi
+On the Raspberry Pi, open up a terminal and run ```su``` to enter superuser mode. Then, run the following commmand:
+```
+export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=YYY.YYY.YYY.YYY
+```
+where XXX.XXX.XXX.XXX represents the IP address of the **host computer**, and YYY.YYY.YYY.YYY represents the IP address of the **Raspberry Pi**.
+
+Navigate to the uwb_workspace directory, and run 
+
+```
+source devel/setup.bash
+```
+
+Finally, start the streaming by running:
+
+```
+rosrun x4m05 sender
+```
+
+Successful execution will result in "Chunk Sent" being printed. 
+
 
 
