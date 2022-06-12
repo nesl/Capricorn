@@ -57,7 +57,7 @@ Connect both devices to the same network switch, a higher speed switch will enab
 Open up **two** terminals and run: 
 
 ```
-export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XX
+export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XXX
 ```
 where XXX.XXX.XXX.XXX represents the IP address of the **host computer** on each terminal.
 
@@ -105,12 +105,71 @@ Successful execution will result in "Chunk Sent" being printed.
 The system should now be running in full capacity. If there is uncertainty about whether the vibration data is being sent over, open up a terminal on the host machine and run 
 
 ```
-export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XX
+export ROS_MASTER_URI=http://XXX.XXX.XXX.XXX:11311 && export ROS_IP=XXX.XXX.XXX.XXX
 rostopic list
 ```
 Check to see if /uwb_chunk is among the listed topic
 
 Then, run ```rostopic echo /uwb_chunk```. If data is being properly streamed, then this should print out a huge chunk of numbers every second.
 
+To enable multi view for two uwb sensors, or complex event detection, change the #define flags in lines 89 and 90.
+
+# Working with Prerecorded Data
+Even if you do not have the available sensors, you can still test out Capricorn with the provided prerecorded data. Download and clone the **src** folder to a desired directory.
+
+Download the rosbag files in this google drive: 
+
+## Device Setup
+Setting up the host machine involves these following installations:
+
+### Ros Installation:
+Install ROS Melodic from the following link: [ROS Installation](http://wiki.ros.org/noetic/Installation)
+
+Note that ROS is only compatible with Linux distributions
+
+### Intel Realsense Installation:
+Install Intel Realsense from the following link: [Intel Realsense Installation](https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md)
+
+Follow the instructions to install the pre-built packages
+### Libtorch Installation:
+Install libtorch, following the instructions from the link: [Libtorch Installation](https://pytorch.org/cppdocs/installing.html)
+
+Note that installation of a GPU based version of libtorch will require some configuration of existing CUDA environments
+
+### OpenCV Installation:
+This project leverages the Aruco AprilTag library from OpenCV, specifically the 36h11 tag family. This was introduced in the 3.4.2 version. Older versions of OpenCV will not be compatible with the current code. 
+
+As a precaution, install the latest version of OpenCV from the following link: [OpenCV Installation](https://docs.opencv.org/4.x/d7/d9f/tutorial_linux_install.html). 
+
+**Be sure to also include the OpenCV Contrib Libraries**
+
+### Eigen Installation:
+Install the Eigen library by following the instruction in this link: [Eigen Installation](https://eigen.tuxfamily.org/dox/GettingStarted.html)
+
+## Source Code Modification
+In the src folder, delete the lidar_streamer directory. Navigate to the object_tracker folder within src, and open the CMakeLists.txt file. On line 7, change the realsense2_DIR to the location of the realsense2 cmake file.On line 30, change the CMAKE_PREFIX_PATH to the location of the libtorch cmake file installed during the libtorch download. 
+
+Locate the run.cpp file inside the object_tracker/src directory. On line 1582 modify the absolute file path to point to **Weights/FullSetGPU.torchscript.pt** within object_tracker. On line 1587 modify the absolute file path to point to **Weights/FullSet.torchscript.pt** within object_tracker. On line 1606 modify the absolute file path to point to the **object_tracker/objects.names** file.
+
+Run ```catkin_make``` on the parent directory of the src folder. If errors arise, verify that the file paths are correct.
+
+## Running the System
+
+Open another terminal, you should now have two terminal - one new terminal and one in the parent of the src directory.
+
+In the new terminal, navigate to the folder containing the downloaded, extracted google drive files and run:
+
+```
+rosbag play desired_file.bag
+```
+
+In the src terminal, run:
+
+```
+rosrun object_tracker testYolo
+```
+You should see a new window pop up containing both vibration information displayed next to bounding boxes overlayed on a video.
+
+To enable multi view for two uwb sensors, or complex event detection, change the #define flags in lines 89 and 90.
 
 
