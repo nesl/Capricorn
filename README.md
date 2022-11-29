@@ -117,7 +117,7 @@ To enable multi view for two uwb sensors, or complex event detection, change the
 # Working with Prerecorded Data
 Even if you do not have the available sensors, you can still test out Capricorn with the provided prerecorded data. Download and clone the **src** folder to a desired directory.
 
-Download the rosbag files in this google drive: 
+Download the rosbag files in this google drive: https://drive.google.com/file/d/1LOMHybkEZxwewf7A5JH-KVUtQ49OO6X8/view?usp=sharing
 
 ## Device Setup
 Setting up the host machine involves these following installations:
